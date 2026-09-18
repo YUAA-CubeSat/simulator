@@ -1,3 +1,5 @@
 Basilisk
 numpy
 PyYAML
+matplotlib
+Pillow

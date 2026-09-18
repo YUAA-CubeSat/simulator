@@ -66,3 +66,48 @@ Run the focused tests with:
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+## Telemetry plots and orbit animation
+
+Install the visualization dependencies in the virtual environment:
+
+```sh
+.venv/bin/python -m pip install matplotlib Pillow
+```
+
+Run these utilities from the repository root after a simulation:
+
+```sh
+.venv/bin/python -m utilities.plot_magnetorquers telemetry.csv
+.venv/bin/python -m utilities.plot_ggb telemetry.csv
+.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv
+.venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml
+```
+
+The plots are saved to `plots/magnetorquers.png`, `plots/ggb_extension.png`,
+and `plots/angular_velocity.png`. They show applied X/Y/Z magnetic dipoles in
+A·m², actual gravity gradient boom extension in meters, and X/Y/Z body angular
+velocity plus its Euclidean magnitude in rad/s. X is roll, Y is pitch, and Z is
+yaw. All time axes use simulation seconds. Magnetorquer plots hold each sampled
+value until the next sample; changes between telemetry samples cannot be recovered.
+
+The animation defaults to `plots/orbit.gif` and displays the recorded orbit in
+Earth centered inertial coordinates, with Earth drawn to scale. The Sun direction
+comes from the simulator's solar model using the supplied config's `start_utc`;
+use the config that produced the telemetry. Sun distance and marker sizes are
+reduced for visibility. The animation does not depict spacecraft attitude.
+Up to 300 frames span the complete recording at 20 frames per second, using
+linear position interpolation at evenly spaced simulation times. Sparse telemetry
+can therefore make the path between samples approximate.
+
+All scripts accept an optional CSV path (default `telemetry.csv`), `-o/--output`,
+and `--show` to also open a window. Static plots support PNG, PDF, and SVG output.
+The animation supports GIF and interactive HTML with playback controls:
+
+```sh
+.venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml --frames 180 --fps 15 -o plots/orbit.html
+.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv -o plots/angular_velocity.svg --show
+```
+
+The utilities require NumPy, Matplotlib, and Pillow, plus PyYAML for animation;
+they can process existing telemetry without loading Basilisk.

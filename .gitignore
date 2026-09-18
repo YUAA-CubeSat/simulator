@@ -4,5 +4,6 @@ __pycache__/
 *.so
 *.dylib
 *.dll
-config.yaml
+*config.yaml
 telemetry.csv
+plots/
