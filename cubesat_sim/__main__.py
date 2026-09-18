@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import time
+from pathlib import Path
+
+import numpy as np
+
+from .config import load_config
+from .io import HitlController, SitlController
+from .physics import Plant, Sensors
+
+
+def run(config):
+    plant = Plant(config)
+    sensors = Sensors(config)
+    sim = config["simulation"]
+    controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(config["hitl"])
+    file = None
+    try:
+        output = sim.get("output_csv")
+        if output:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            file = open(output, "w", newline="", encoding="utf-8")
+            writer = csv.writer(file)
+            writer.writerow(["time_s", "x_m", "y_m", "z_m", "wx_rad_s", "wy_rad_s", "wz_rad_s", "boom_length_m", "Ixx_kg_m2", "Iyy_kg_m2", "Izz_kg_m2", "mx_Am2", "my_Am2", "mz_Am2", "Bx_T", "By_T", "Bz_T"])
+        periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}
+        steps = round(sim["duration_s"] / plant.dt)
+        applied = np.zeros(3)
+        boom_target = plant.boom_length
+        start = time.monotonic()
+        for tick in range(steps):
+            t = plant.time_s
+            if tick % periods["magnetometer_period_s"] == 0:
+                mag1, mag2 = sensors.magnetometers(plant)
+                controller.magnetometers(t, mag1, mag2)
+            if tick % periods["sun_period_s"] == 0:
+                controller.sun(t, sensors.sun(plant))
+            if tick % periods["control_period_s"] == 0:
+                applied, boom_target = controller.step(tick, t, sim["control_period_s"])
+            applied = plant.step(applied, boom_target)
+            if file and (tick + 1) % periods["telemetry_period_s"] == 0:
+                state = plant.state()
+                inertia = np.asarray(plant.sc.scMassOutMsg.read().ISC_PntB_B)
+                writer.writerow([plant.time_s, *state["position_m"], *state["angular_rate_rad_s"], plant.boom_length,
+                                 inertia[0, 0], inertia[1, 1], inertia[2, 2], *applied, *plant.magnetic_field_n()])
+            if sim["clock"] == "realtime":
+                remaining = start + (tick + 1) * plant.dt - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
+        return plant
+    finally:
+        controller.close()
+        if file:
+            file.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Basilisk CubeSat SITL/HITL simulator")
+    parser.add_argument("config", help="YAML configuration file")
+    args = parser.parse_args()
+    run(load_config(args.config))
+
+
+if __name__ == "__main__":
+    main()
