@@ -4,7 +4,7 @@ Basilisk propagates the CubeSat orbit and attitude. The simulator calls a C/Rust
 
 ## Quick start
 
-Use the existing virtual environment containing Basilisk, NumPy, and PyYAML. On macOS:
+Use the existing virtual environment containing the dependencies in `requirements.txt` (including `tqdm` for terminal progress). On macOS:
 
 ```sh
 cc -dynamiclib -O2 examples/adcs_example.c -o libadcs.dylib
@@ -16,6 +16,8 @@ cp config.example.yaml config.yaml
 On Linux, build with `cc -shared -fPIC -O2 examples/adcs_example.c -o libadcs.so`; the template path already names that file. The example uses basic B-dot control and requests 0.5 m boom deployment. Replace it with your ADCS implementation. The output CSV is written beside the config file.
 
 ## Independent timing
+
+SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. HITL also prints received USB/UART data above the bar as `USB RX: b'A ...\n'`. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
 `step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the three ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, Sun, control, then propagation. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 

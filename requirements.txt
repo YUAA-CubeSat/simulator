@@ -3,3 +3,4 @@ numpy
 PyYAML
 matplotlib
 Pillow
+tqdm

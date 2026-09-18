@@ -83,6 +83,7 @@ class SimulatorTests(unittest.TestCase):
         controller = None
         try:
             lines = []
+            received = []
 
             def board():
                 data = bytearray()
@@ -96,7 +97,8 @@ class SimulatorTests(unittest.TestCase):
 
             thread = threading.Thread(target=board)
             thread.start()
-            controller = HitlController({"port": os.ttyname(slave), "baudrate": 115200, "timeout_s": 1})
+            controller = HitlController({"port": os.ttyname(slave), "baudrate": 115200, "timeout_s": 1},
+                                        on_receive=received.append)
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
             controller.sun(1.0, [1, 0, 0])
             dipole, boom = controller.step(7, 1.0, 1.0)
@@ -106,6 +108,7 @@ class SimulatorTests(unittest.TestCase):
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)
+            self.assertEqual(b"".join(received), b"A 7 100000 0 -100000 400\n")
             thread.join(timeout=1)
             self.assertFalse(thread.is_alive())
         finally:

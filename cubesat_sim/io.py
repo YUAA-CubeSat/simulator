@@ -59,7 +59,8 @@ class SitlController:
 
 
 class HitlController:
-    def __init__(self, config):
+    def __init__(self, config, on_receive=None):
+        self.on_receive = on_receive
         baud = int(config["baudrate"])
         attr = getattr(termios, f"B{baud}", None)
         if attr is None:
@@ -116,6 +117,8 @@ class HitlController:
             data = os.read(self.fd, 256)
             if not data:
                 raise ConnectionError("UART closed")
+            if self.on_receive is not None:
+                self.on_receive(data)
             self.buffer.extend(data)
             if len(self.buffer) > 256:
                 raise ValueError("UART actuator line exceeds 256 bytes")

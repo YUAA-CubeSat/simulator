@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 
 from .config import load_config
 from .io import HitlController, SitlController
@@ -16,8 +18,11 @@ def run(config):
     plant = Plant(config)
     sensors = Sensors(config)
     sim = config["simulation"]
-    controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(config["hitl"])
+    controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
+        config["hitl"], on_receive=lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr)
+    )
     file = None
+    progress = None
     try:
         output = sim.get("output_csv")
         if output:
@@ -29,6 +34,8 @@ def run(config):
         steps = round(sim["duration_s"] / plant.dt)
         applied = np.zeros(3)
         boom_target = plant.boom_length
+        progress = tqdm(total=steps, desc=sim["mode"].upper(), unit="step", dynamic_ncols=True,
+                        postfix=f"sim 0/{sim['duration_s']:g} s")
         start = time.monotonic()
         for tick in range(steps):
             t = plant.time_s
@@ -49,8 +56,12 @@ def run(config):
                 remaining = start + (tick + 1) * plant.dt - time.monotonic()
                 if remaining > 0:
                     time.sleep(remaining)
+            progress.set_postfix_str(f"sim {plant.time_s:g}/{sim['duration_s']:g} s", refresh=False)
+            progress.update(1)
         return plant
     finally:
+        if progress is not None:
+            progress.close()
         controller.close()
         if file:
             file.close()
