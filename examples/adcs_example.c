@@ -41,6 +41,6 @@ int adcs_step(double time_s, double dt_s, double dipole_Am2[3], double *boom_len
         if (command < -0.2) command = -0.2;
         dipole_Am2[i] = command;
     }
-    *boom_length_m = 0.5;
+    *boom_length_m = 0.0;
     return 0;
 }

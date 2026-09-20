@@ -15,6 +15,7 @@ from cubesat_sim.io import HitlController
 from cubesat_sim.physics import Plant, Sensors
 from cubesat_sim.sun import sun_position_eci
 from cubesat_sim.__main__ import run
+from Basilisk.utilities import RigidBodyKinematics
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,6 +24,54 @@ class SimulatorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.config = load_config(ROOT / "config.example.yaml")
+
+    def test_each_step_advances_dynamics_after_long_simulated_time(self):
+        plant = Plant(copy.deepcopy(self.config))
+        reader = plant.sc.scStateOutMsg.addSubscriber()
+        # Repeated addition of 0.2 s used to miss the task at step 14796.
+        for tick in range(1, 15001):
+            plant.step([0, 0, 0], 0)
+            self.assertEqual(reader.timeWritten(), tick * 200_000_000)
+            self.assertAlmostEqual(plant.time_s, tick / 5, delta=1e-9)
+
+    def test_body_field_for_known_positive_z_rotation(self):
+        config = copy.deepcopy(self.config)
+        config['orbit']['attitude_mrp'] = [0, 0, np.tan(np.pi / 8)]
+        config['orbit']['angular_rate_rad_s'] = [0, 0, 0.01]
+        for mag in config['sensors']['magnetometers']:
+            mag['noise_std_T'] = 0
+        plant = Plant(config)
+        # Orbital gravity is already initialized; disable only explicit GG torque.
+        config['environment']['earth_mu_m3_s2'] = 0
+        plant.magnetic_field_n = lambda: np.array([25e-6, 0, 0])
+        sensors = Sensors(config)
+        for tick in range(501):
+            theta = np.pi / 2 + 0.01 * plant.time_s
+            expected = 25e-6 * np.array([np.cos(theta), -np.sin(theta), 0])
+            np.testing.assert_allclose(sensors.magnetometers(plant)[0], expected, atol=1e-15, rtol=0)
+            if tick < 500:
+                plant.step([0, 0, 0], 0)
+
+    def test_torque_free_body_rates_reverse_with_conserved_momentum(self):
+        config = copy.deepcopy(self.config)
+        config['orbit']['angular_rate_rad_s'] = [0.09, -0.09, 0.09]
+        plant = Plant(config)
+        config['environment']['earth_mu_m3_s2'] = 0
+        inertia = np.asarray(config['spacecraft']['bus_inertia_kg_m2'])
+        initial = plant.state()
+        initial_w = initial['angular_rate_rad_s']
+        initial_h = np.asarray(RigidBodyKinematics.MRP2C(initial['attitude_mrp'])).T @ (inertia @ initial_w)
+        initial_energy = 0.5 * initial_w @ inertia @ initial_w
+        max_y = initial_w[1]
+        for _ in range(3000):
+            plant.step([0, 0, 0], 0)
+            state = plant.state()
+            w = state['angular_rate_rad_s']
+            h = np.asarray(RigidBodyKinematics.MRP2C(state['attitude_mrp'])).T @ (inertia @ w)
+            self.assertLess(np.linalg.norm(h - initial_h) / np.linalg.norm(initial_h), 1e-8)
+            self.assertLess(abs((0.5 * w @ inertia @ w) / initial_energy - 1), 1e-9)
+            max_y = max(max_y, w[1])
+        self.assertGreater(max_y, 0.09)
 
     def test_wmm_sun_and_boom_change_with_time(self):
         config = copy.deepcopy(self.config)

@@ -22,11 +22,13 @@ class Plant:
     def __init__(self, config):
         self.config = config
         self.dt = float(config["simulation"]["step_s"])
+        self._step_ns = macros.sec2nano(self.dt)
+        self._time_ns = 0
         self.time_s = 0.0
         self.boom_length = float(config["spacecraft"]["boom"]["initial_length_m"])
         self.sim = SimulationBaseClass.SimBaseClass()
         process = self.sim.CreateNewProcess("physics")
-        process.addTask(self.sim.CreateNewTask("physicsStep", macros.sec2nano(self.dt)))
+        process.addTask(self.sim.CreateNewTask("physicsStep", self._step_ns))
         process.addTask(self.sim.CreateNewTask("fieldStep", macros.sec2nano(config["simulation"]["field_period_s"])))
         self.sc = spacecraft.Spacecraft()
         self.sc.ModelTag = "CubeSat"
@@ -87,8 +89,11 @@ class Plant:
         dipole = np.clip(np.asarray(dipole, dtype=float), -max_dipole, max_dipole)
         boom_reaction = -((inertia - previous_inertia) / self.dt) @ state["angular_rate_rad_s"]
         self.effect.extTorquePntB_B = (np.cross(dipole, b_body) + gg + boom_reaction).tolist()
-        self.time_s += self.dt
-        self.sim.ConfigureStopTime(macros.sec2nano(self.time_s))
+        # Stop exactly on the task boundary. Accumulated float seconds can round
+        # below it on long runs, skipping a step and later advancing twice.
+        self._time_ns += self._step_ns
+        self.time_s = self._time_ns / 1e9
+        self.sim.ConfigureStopTime(self._time_ns)
         self.sim.ExecuteSimulation()
         return dipole
 
