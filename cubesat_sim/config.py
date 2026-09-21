@@ -112,6 +112,9 @@ def load_config(path):
         sitl["timeout_s"] = float(sitl["timeout_s"])
         if not math.isfinite(sitl["timeout_s"]) or sitl["timeout_s"] <= 0:
             raise ValueError("SITL timeout_s must be positive and finite")
+        sitl["startup_delay_s"] = float(sitl.get("startup_delay_s", 0))
+        if not math.isfinite(sitl["startup_delay_s"]) or sitl["startup_delay_s"] < 0:
+            raise ValueError("SITL startup_delay_s must be nonnegative and finite")
         sitl["cwd"] = str(path.parent)
     if s.get("output_csv"):
         s["output_csv"] = str((path.parent / s["output_csv"]).resolve())

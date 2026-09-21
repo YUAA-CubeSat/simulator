@@ -50,7 +50,8 @@ sensors:
 
 sitl:
   command: [./adcs_example]   # executable and arguments; relative to this config
-  timeout_s: 1.0             # wall-clock response/write deadline
+  startup_delay_s: 5.0       # boot grace period before sending any messages
+  timeout_s: 1.0             # wall-clock response/write deadline after startup
 
 hitl:
   port: /dev/ttyUSB0

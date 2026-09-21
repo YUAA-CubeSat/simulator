@@ -70,6 +70,9 @@ class SitlController(_LineController):
         self.timeout = float(config["timeout_s"])
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise ValueError("SITL timeout_s must be positive and finite")
+        startup_delay = float(config.get("startup_delay_s", 0))
+        if not math.isfinite(startup_delay) or startup_delay < 0:
+            raise ValueError("SITL startup_delay_s must be nonnegative and finite")
         command = config.get("command")
         if not isinstance(command, list) or not command or any(not isinstance(arg, str) or not arg for arg in command):
             raise ValueError("sitl.command must be a nonempty list of strings")
@@ -82,6 +85,13 @@ class SitlController(_LineController):
             self.read_fd = self.process.stdout.fileno()
             os.set_blocking(self.write_fd, False)
             os.set_blocking(self.read_fd, False)
+            if startup_delay:
+                try:
+                    status = self.process.wait(timeout=startup_delay)
+                except subprocess.TimeoutExpired:
+                    pass  # Boot grace period elapsed; begin protocol traffic.
+                else:
+                    raise ConnectionError(f"SITL process exited during startup with status {status}")
         except BaseException:
             self.close()
             raise

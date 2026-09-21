@@ -21,12 +21,15 @@ Set `simulation.mode: sitl` and configure an executable and its arguments as a Y
 ```yaml
 sitl:
   command: [./adcs_example]
+  startup_delay_s: 5.0
   timeout_s: 1.0
 ```
 
 The simulator starts one process per run, sends sensor and control messages to its stdin, and reads actuator replies from its stdout using the same protocol as HITL below. Controller state persists between messages. The process runs in the config file's directory, so relative executable and argument paths are relative to that directory; bare executable names are searched on `PATH`. Commands run without a shell. For example, a Python controller can use `command: [python3, -u, controller.py]`.
 
-Reserve stdout for actuator replies, flush each reply immediately, and send diagnostics to stderr (inherited by the simulator). `sitl.timeout_s` is a positive wall-clock deadline for each write and actuator response, including during simulated-clock runs. A closed pipe, missing reply, or invalid reply stops the simulation. On completion or failure the simulator closes the process's stdin, waits briefly for exit, then terminates or kills it if needed and reaps it.
+`sitl.startup_delay_s` gives the process a wall-clock boot grace period before any sensor or control messages are sent. Set it to the platform’s boot time plus a margin; the example configuration allows five seconds. It must be finite and nonnegative and defaults to zero when omitted. Simulation time and realtime pacing start after this delay. A process that exits during startup stops the run immediately. This is a fixed delay, not a readiness handshake; stdout must remain protocol-only during boot as well.
+
+Reserve stdout for actuator replies, flush each reply immediately, and send diagnostics to stderr (inherited by the simulator). `sitl.timeout_s` is a positive wall-clock deadline for each write and actuator response after startup, including during simulated-clock runs. A closed pipe, missing reply, or invalid reply stops the simulation. On completion or failure the simulator closes the process's stdin, waits briefly for exit, then terminates or kills it if needed and reaps it.
 
 Existing shared-library configurations must replace `sitl.library` and the symbol settings with `sitl.command` and `sitl.timeout_s`. C and Rust controllers should now build as executables with a message loop; no shared library or C ABI is required.
 

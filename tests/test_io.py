@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -13,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SitlTests(unittest.TestCase):
-    def controller(self, script, timeout=1):
-        controller = SitlController({"command": [sys.executable, "-u", "-c", script], "timeout_s": timeout})
+    def controller(self, script, timeout=1, startup_delay=0):
+        controller = SitlController({"command": [sys.executable, "-u", "-c", script], "timeout_s": timeout, "startup_delay_s": startup_delay})
         self.addCleanup(controller.close)
         return controller
 
@@ -59,6 +60,18 @@ print('A 8 0 0 0 0', flush=True)
         self.assertTrue(controller.process.stdin.closed)
         self.assertTrue(controller.process.stdout.closed)
 
+    def test_boot_delay_precedes_traffic_and_preserves_response_timeout(self):
+        controller = self.controller("import select, sys, time\nassert not select.select([sys.stdin], [], [], 0.2)[0], 'traffic before boot'\nassert input() == 'T 0 0 1000'\nprint('A 0 0 0 0 0', flush=True)\ninput()\ntime.sleep(60)\n", timeout=0.1, startup_delay=0.5)
+        np.testing.assert_array_equal(controller.step(0, 0, 1)[0], [0, 0, 0])
+        with self.assertRaises(TimeoutError):
+            controller.step(1, 1, 1)
+
+    def test_exit_during_boot_fails_promptly(self):
+        start = time.monotonic()
+        with self.assertRaisesRegex(ConnectionError, 'startup with status 3'):
+            self.controller('raise SystemExit(3)', startup_delay=10)
+        self.assertLess(time.monotonic() - start, 2)
+
     def test_premature_exit(self):
         controller = self.controller('input()')
         with self.assertRaises(ConnectionError):
@@ -72,6 +85,7 @@ print('A 8 0 0 0 0', flush=True)
             config = load_config(ROOT / 'config.example.yaml')
             self.assertEqual(config['sitl']['cwd'], str(ROOT))
             config['sitl']['cwd'] = directory
+            config['sitl']['startup_delay_s'] = 0
             controller = SitlController(config['sitl'])
             try:
                 controller.magnetometers(0, [0, 0, 0], [0, 0, 0])
@@ -88,6 +102,9 @@ print('A 8 0 0 0 0', flush=True)
         for command in [None, './controller', [], [1]]:
             with self.subTest(command=command), self.assertRaisesRegex(ValueError, 'command'):
                 SitlController({'command': command, 'timeout_s': 1})
+        for delay in [-1, float('nan'), float('inf')]:
+            with self.subTest(delay=delay), self.assertRaisesRegex(ValueError, 'startup_delay'):
+                SitlController({'command': ['./controller'], 'timeout_s': 1, 'startup_delay_s': delay})
         for timeout in [0, -1, float('nan'), float('inf')]:
             with self.subTest(timeout=timeout), self.assertRaisesRegex(ValueError, 'timeout'):
                 SitlController({'command': ['./controller'], 'timeout_s': timeout})
