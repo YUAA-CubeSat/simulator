@@ -7,6 +7,7 @@ from Basilisk.simulation import spacecraft, extForceTorque, magneticFieldWMM
 from Basilisk.utilities import SimulationBaseClass, macros, simIncludeGravBody, RigidBodyKinematics
 
 from .config import _vector
+from .earth import EarthOrientation
 from .sun import sun_position_eci
 
 
@@ -58,7 +59,12 @@ class Plant:
         payload.hours, payload.minutes, payload.seconds = epoch.hour, epoch.minute, epoch.second + epoch.microsecond / 1e6
         self.epoch_msg = messaging.EpochMsg().write(payload)
         self.wmm.epochInMsg.subscribeTo(self.epoch_msg)
-        self.sim.AddModelToTask("fieldStep", self.wmm)
+        self.earth_orientation = EarthOrientation(config["simulation"]["start_utc"])
+        self.wmm.planetPosInMsg.subscribeTo(self.earth_orientation.planet_state_out)
+        # Explicit priorities ensure WMM sees the orientation at its own timestamp,
+        # including the first evaluation at t=0.
+        self.sim.AddModelToTask("fieldStep", self.earth_orientation, ModelPriority=1)
+        self.sim.AddModelToTask("fieldStep", self.wmm, ModelPriority=0)
         self.sim.InitializeSimulation()
         self.sim.ConfigureStopTime(0)
         self.sim.ExecuteSimulation()
