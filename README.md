@@ -1,19 +1,34 @@
 # CubeSat SITL/HITL simulator
 
-Basilisk propagates the CubeSat orbit and attitude. The simulator calls a C/Rust ADCS library in SITL or exchanges compact ASCII lines with an STM32 over UART in HITL. One YAML file configures the spacecraft, sensors, environment, timing, and interface.
+Basilisk propagates the CubeSat orbit and attitude. The simulator exchanges compact ASCII lines with an ADCS subprocess over stdin/stdout in SITL or with an STM32 over UART in HITL. One YAML file configures the spacecraft, sensors, environment, timing, and interface.
 
 ## Quick start
 
-Use the existing virtual environment containing the dependencies in `requirements.txt` (including `tqdm` for terminal progress). On macOS:
+Use the existing virtual environment containing the dependencies in `requirements.txt` (including `tqdm` for terminal progress). On macOS or Linux:
 
 ```sh
-cc -dynamiclib -O2 examples/adcs_example.c -o libadcs.dylib
+cc -O2 -Wall -Wextra examples/adcs_example.c -o adcs_example
 cp config.example.yaml config.yaml
-# Set sitl.library to ./libadcs.dylib in config.yaml
 .venv/bin/python -m cubesat_sim config.yaml
 ```
 
-On Linux, build with `cc -shared -fPIC -O2 examples/adcs_example.c -o libadcs.so`; the template path already names that file. The example uses basic B-dot control and requests 0.5 m boom deployment. Replace it with your ADCS implementation. The output CSV is written beside the config file.
+The example executable uses basic B-dot control and keeps the boom retracted. Replace it with your ADCS implementation in any language. The output CSV is written beside the config file.
+
+## SITL subprocess
+
+Set `simulation.mode: sitl` and configure an executable and its arguments as a YAML list:
+
+```yaml
+sitl:
+  command: [./adcs_example]
+  timeout_s: 1.0
+```
+
+The simulator starts one process per run, sends sensor and control messages to its stdin, and reads actuator replies from its stdout using the same protocol as HITL below. Controller state persists between messages. The process runs in the config file's directory, so relative executable and argument paths are relative to that directory; bare executable names are searched on `PATH`. Commands run without a shell. For example, a Python controller can use `command: [python3, -u, controller.py]`.
+
+Reserve stdout for actuator replies, flush each reply immediately, and send diagnostics to stderr (inherited by the simulator). `sitl.timeout_s` is a positive wall-clock deadline for each write and actuator response, including during simulated-clock runs. A closed pipe, missing reply, or invalid reply stops the simulation. On completion or failure the simulator closes the process's stdin, waits briefly for exit, then terminates or kills it if needed and reaps it.
+
+Existing shared-library configurations must replace `sitl.library` and the symbol settings with `sitl.command` and `sitl.timeout_s`. C and Rust controllers should now build as executables with a message loop; no shared library or C ABI is required.
 
 ## Independent timing
 
@@ -21,26 +36,18 @@ SITL and HITL display a terminal progress bar with completed steps, elapsed wall
 
 `step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the three ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, Sun, control, then propagation. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
-For SITL, export these C ABI functions from a shared C or Rust library:
+## SITL/HITL line protocol
 
-```c
-void adcs_magnetometer(double time_s, const double mag1_T[3], const double mag2_T[3]);
-void adcs_sun(double time_s, const double sun_body[3], int valid);
-int adcs_step(double time_s, double control_period_s, double dipole_Am2_out[3], double *boom_length_m_out);
-```
+Both modes use ASCII lines with space separated decimal integers and `\n` termination. SITL uses the child process's stdin/stdout. For HITL, set `simulation.mode: hitl`, `simulation.clock: realtime`, and `hitl.port`; UART uses 8N1. No JSON parser is needed on the MCU.
 
-The functions may retain controller state between calls. `adcs_step` returns zero on success. The magnetometer vectors are in their configured sensor frames. The Sun vector is a unit vector in the body frame when `valid=1`; it is zero when `valid=0`. A Rust library can export the same ABI with `extern "C"` and `#[no_mangle]` (or `#[unsafe(no_mangle)]` in Rust 2024). Symbol names are configurable in `sitl`.
-
-## HITL UART protocol
-
-Set `simulation.mode: hitl`, `simulation.clock: realtime`, and `hitl.port`. The UART format is ASCII, 8N1, one line per message, with space separated decimal integers and `\n` termination. No JSON parser is needed on the MCU.
+The magnetometer vectors are in their configured sensor frames. The Sun vector is a unit vector in the body frame when valid, otherwise zero. Both transports use the integer units below, so SITL now has the same quantization as HITL.
 
 | Direction | Line | Units |
 | --- | --- | --- |
-| Simulator → MCU | `M time_ms m1x m1y m1z m2x m2y m2z` | magnetic readings, nT |
-| Simulator → MCU | `S time_ms valid sx sy sz` | Sun body vector, signed Q15 (`32767` = 1) |
-| Simulator → MCU | `T tick time_ms period_ms` | run one ADCS control step |
-| MCU → Simulator | `A tick mx my mz boom` | dipoles, µA·m²; boom target, mm |
+| Simulator → Controller | `M time_ms m1x m1y m1z m2x m2y m2z` | magnetic readings, nT |
+| Simulator → Controller | `S time_ms valid sx sy sz` | Sun body vector, signed Q15 (`32767` = 1) |
+| Simulator → Controller | `T tick time_ms period_ms` | run one "tick" of the firmware |
+| Controller → Simulator | `A tick mx my mz boom` | dipoles, µA·m²; boom target, mm |
 
 Example exchange:
 
@@ -51,7 +58,7 @@ T 5 1000 1000
 A 5 100000 0 -100000 500
 ```
 
-The `A` tick must match the preceding `T` tick. The MCU sends one `A` line after each `T`; no response is needed for `M` or `S`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `hitl.timeout_s` is the response deadline. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. At 115200 baud, the sample `M` line is about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
+The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M` or `S`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. At 115200 baud, the sample `M` line is about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
 
 ## Environment and physical model
 

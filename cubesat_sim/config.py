@@ -105,7 +105,14 @@ def load_config(path):
     if not 0 < sun["half_angle_deg"] <= 180 or not math.isfinite(sun["noise_std_rad"]) or sun["noise_std_rad"] < 0:
         raise ValueError("sun sensor angle or noise is invalid")
     if s["mode"] == "sitl":
-        c["sitl"]["library"] = str((path.parent / c["sitl"]["library"]).resolve())
+        sitl = c["sitl"]
+        command = sitl.get("command")
+        if not isinstance(command, list) or not command or any(not isinstance(arg, str) or not arg for arg in command):
+            raise ValueError("sitl.command must be a nonempty list of strings")
+        sitl["timeout_s"] = float(sitl["timeout_s"])
+        if not math.isfinite(sitl["timeout_s"]) or sitl["timeout_s"] <= 0:
+            raise ValueError("SITL timeout_s must be positive and finite")
+        sitl["cwd"] = str(path.parent)
     if s.get("output_csv"):
         s["output_csv"] = str((path.parent / s["output_csv"]).resolve())
     return c

@@ -1,5 +1,6 @@
-/* Example C ABI controller: elementary B-dot detumbling and boom deployment. */
+/* Example stdin/stdout controller: elementary B-dot detumbling and boom deployment. */
 #include <stddef.h>
+#include <stdio.h>
 
 static double previous_mag[3], current_mag[3], previous_time, current_time;
 static int have_current, have_previous;
@@ -43,4 +44,40 @@ int adcs_step(double time_s, double dt_s, double dipole_Am2[3], double *boom_len
     }
     *boom_length_m = 0.0;
     return 0;
+}
+
+/* Same integer line protocol as the HITL firmware. stdout is protocol only. */
+int main(void)
+{
+    char line[256];
+    while (fgets(line, sizeof line, stdin)) {
+        long long time_ms, tick, period_ms, values[6];
+        int valid;
+        if (line[0] == 'M' && sscanf(line, "M %lld %lld %lld %lld %lld %lld %lld",
+                &time_ms, &values[0], &values[1], &values[2],
+                &values[3], &values[4], &values[5]) == 7) {
+            double mag1[3], mag2[3];
+            for (int i = 0; i < 3; ++i) {
+                mag1[i] = values[i] * 1e-9;
+                mag2[i] = values[i + 3] * 1e-9;
+            }
+            adcs_magnetometer(time_ms / 1000.0, mag1, mag2);
+        } else if (line[0] == 'S' && sscanf(line, "S %lld %d %lld %lld %lld",
+                &time_ms, &valid, &values[0], &values[1], &values[2]) == 5) {
+            double vector[3];
+            for (int i = 0; i < 3; ++i) vector[i] = values[i] / 32767.0;
+            adcs_sun(time_ms / 1000.0, vector, valid);
+        } else if (line[0] == 'T' && sscanf(line, "T %lld %lld %lld",
+                &tick, &time_ms, &period_ms) == 3) {
+            double dipole[3], boom;
+            if (adcs_step(time_ms / 1000.0, period_ms / 1000.0, dipole, &boom)) return 1;
+            printf("A %lld %.0f %.0f %.0f %.0f\n", tick,
+                   dipole[0] * 1e6, dipole[1] * 1e6, dipole[2] * 1e6, boom * 1000);
+            if (fflush(stdout) == EOF) return 1;
+        } else {
+            fprintf(stderr, "Invalid simulator message: %s", line);
+            return 1;
+        }
+    }
+    return ferror(stdin) ? 1 : 0;
 }

@@ -49,10 +49,8 @@ sensors:
     noise_std_rad: 0.002
 
 sitl:
-  library: ./libadcs.so #./libadcs.dylib on MacOS
-  magnetometer_symbol: adcs_magnetometer
-  sun_symbol: adcs_sun
-  step_symbol: adcs_step
+  command: [./adcs_example]   # executable and arguments; relative to this config
+  timeout_s: 1.0             # wall-clock response/write deadline
 
 hitl:
   port: /dev/ttyUSB0
