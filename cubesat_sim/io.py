@@ -31,9 +31,11 @@ class _LineController:
                 raise TimeoutError(f"{self.transport} write timed out")
             offset += os.write(self.write_fd, data[offset:])
 
-    def magnetometers(self, time_s, mag1, mag2):
-        values = [round(float(x) * 1e9) for x in (*mag1, *mag2)]
-        self._send("M " + str(round(time_s * 1000)) + " " + " ".join(map(str, values)))
+    def magnetometers(self, time_s, *readings):
+        time_ms = round(time_s * 1000)
+        for sensor_id, reading in enumerate(readings):
+            values = [round(float(x) * 1e9) for x in reading]
+            self._send(f"M {time_ms} {sensor_id} " + " ".join(map(str, values)))
 
     def sun(self, time_s, vector):
         values = [round(float(x) * 32767) for x in vector] if vector is not None else [0, 0, 0]

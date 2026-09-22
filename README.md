@@ -43,11 +43,11 @@ SITL and HITL display a terminal progress bar with completed steps, elapsed wall
 
 Both modes use ASCII lines with space separated decimal integers and `\n` termination. SITL uses the child process's stdin/stdout. For HITL, set `simulation.mode: hitl`, `simulation.clock: realtime`, and `hitl.port`; UART uses 8N1. No JSON parser is needed on the MCU.
 
-The magnetometer vectors are in their configured sensor frames. The Sun vector is a unit vector in the body frame when valid, otherwise zero. Both transports use the integer units below, so SITL now has the same quantization as HITL.
+Each magnetometer sends its raw simulated reading in its configured sensor frame, including bias and noise, without calibration or sensor fusion. Readings are quantized to integer nT, not hardware ADC counts. One `M` line is sent per sensor at each magnetometer update, with the same timestamp and a zero-based `sensor_id` matching its position in `sensors.magnetometers`. Any nonempty number of magnetometers is supported. The Sun vector is a unit vector in the body frame when valid, otherwise zero. Both transports use the integer units below, so SITL now has the same quantization as HITL.
 
 | Direction | Line | Units |
 | --- | --- | --- |
-| Simulator → Controller | `M time_ms m1x m1y m1z m2x m2y m2z` | magnetic readings, nT |
+| Simulator → Controller | `M time_ms sensor_id x y z` | magnetic readings, nT |
 | Simulator → Controller | `S time_ms valid sx sy sz` | Sun body vector, signed Q15 (`32767` = 1) |
 | Simulator → Controller | `T tick time_ms period_ms` | run one "tick" of the firmware |
 | Controller → Simulator | `A tick mx my mz boom` | dipoles, µA·m²; boom target, mm |
@@ -55,13 +55,14 @@ The magnetometer vectors are in their configured sensor frames. The Sun vector i
 Example exchange:
 
 ```text
-M 1000 10000 0 -10000 0 20000 0
+M 1000 0 10000 0 -10000
+M 1000 1 0 20000 0
 S 1000 1 32767 0 0
 T 5 1000 1000
 A 5 100000 0 -100000 500
 ```
 
-The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M` or `S`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. At 115200 baud, the sample `M` line is about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
+The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M` or `S`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. This replaces the previous two-sensor `M` format; controller firmware must update its parser. The example controller receives every sensor but uses only sensor 0 for B-dot control. At 115200 baud, the two sample `M` lines together take about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
 
 ## Environment and physical model
 
@@ -69,7 +70,7 @@ The `A` tick must match the preceding `T` tick. The controller sends one `A` lin
 - Earth orientation is initialized from `simulation.start_utc` and updated before every WMM evaluation at `field_period_s`, including time zero. The planet-state message supplies the J2000-to-Earth-fixed rotation and its derivative, with Earth at the inertial origin. WMM transforms spacecraft position into Earth-fixed coordinates to evaluate the geographic field and returns the field in J2000 coordinates. CSV `Bx_T`, `By_T`, and `Bz_T` remain inertial components; sensors and magnetic torque use the subsequent body-frame rotation.
 - The dependency-free Earth-orientation approximation combines [IAU 1982 Greenwich mean sidereal time](https://github.com/liberfa/erfa/blob/master/src/gmst82.c) with [IAU 1976 precession from J2000](https://github.com/liberfa/erfa/blob/master/src/pmat76.c). UTC approximates UT1 for sidereal rotation and TT for precession. Nutation, polar motion, Earth-orientation corrections, and leap-second crossings are omitted. This includes the dominant daily rotation and date-dependent precession, but is not a precision ITRF transformation. No extra configuration is required. Telemetry generated before this change must be rerun to include the rotating geographic magnetic field.
 - A date-dependent solar ephemeris computes Earth-to-Sun direction. Subtracting the spacecraft position gives the local Sun vector; cylindrical Earth eclipse and sensor field of view determine visibility. This is a low precision solar position model intended for attitude sensing across long detumbling runs.
-- Magnetorquer torque is **m × B** using the WMM field in the body frame. Two magnetometers have independent rotation, bias, and Gaussian noise.
+- Magnetorquer torque is **m × B** using the WMM field in the body frame. Each configured magnetometer has independent rotation, bias, and Gaussian noise.
 - The boom is a massless rod with a point tip mass. Extension changes Basilisk's spacecraft inertia and the gravity gradient torque. The inertia rate adds a reaction torque. `tip_mass_kg`, `axis_body`, initial and allowed lengths, and maximum extension speed are in the config. Flexible boom dynamics are not modeled.
 - The initial orbit state uses Earth centered inertial coordinates with J2000 mean equator/equinox axes. The template's orbit is near circular LEO. Central Earth gravity is used for propagation.
 

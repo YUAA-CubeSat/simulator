@@ -40,8 +40,7 @@ def run(config):
         for tick in range(steps):
             t = plant.time_s
             if tick % periods["magnetometer_period_s"] == 0:
-                mag1, mag2 = sensors.magnetometers(plant)
-                controller.magnetometers(t, mag1, mag2)
+                controller.magnetometers(t, *sensors.magnetometers(plant))
             if tick % periods["sun_period_s"] == 0:
                 controller.sun(t, sensors.sun(plant))
             if tick % periods["control_period_s"] == 0:

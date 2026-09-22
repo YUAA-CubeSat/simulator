@@ -90,8 +90,8 @@ def load_config(path):
     if not model_start <= start or start + timedelta(seconds=s["duration_s"]) >= model_end:
         raise ValueError(f"WMM coefficients are valid from {model_year} through {model_year + 4}")
     mags = sensors["magnetometers"]
-    if len(mags) != 2:
-        raise ValueError("exactly two magnetometers are required")
+    if not mags:
+        raise ValueError("at least one magnetometer is required")
     for i, mag in enumerate(mags):
         dcm = np.asarray(mag["body_to_sensor"], dtype=float)
         if dcm.shape != (3, 3) or not np.allclose(dcm @ dcm.T, np.eye(3), atol=1e-5) or np.linalg.det(dcm) < 0.999:

@@ -7,15 +7,16 @@ static int have_current, have_previous;
 static double sun_body[3];
 static int sun_valid;
 
-void adcs_magnetometer(double time_s, const double mag1_T[3], const double mag2_T[3])
+void adcs_magnetometer(double time_s, int sensor_id, const double mag_T[3])
 {
-    (void)mag2_T; /* Second sensor uses a rotated frame in the template. */
+    /* Use sensor 0 for B-dot; other sensors may use different frames. */
+    if (sensor_id != 0) return;
     if (have_current) {
         for (int i = 0; i < 3; ++i) previous_mag[i] = current_mag[i];
         previous_time = current_time;
         have_previous = 1;
     }
-    for (int i = 0; i < 3; ++i) current_mag[i] = mag1_T[i];
+    for (int i = 0; i < 3; ++i) current_mag[i] = mag_T[i];
     current_time = time_s;
     have_current = 1;
 }
@@ -51,17 +52,14 @@ int main(void)
 {
     char line[256];
     while (fgets(line, sizeof line, stdin)) {
-        long long time_ms, tick, period_ms, values[6];
-        int valid;
-        if (line[0] == 'M' && sscanf(line, "M %lld %lld %lld %lld %lld %lld %lld",
-                &time_ms, &values[0], &values[1], &values[2],
-                &values[3], &values[4], &values[5]) == 7) {
-            double mag1[3], mag2[3];
-            for (int i = 0; i < 3; ++i) {
-                mag1[i] = values[i] * 1e-9;
-                mag2[i] = values[i + 3] * 1e-9;
-            }
-            adcs_magnetometer(time_ms / 1000.0, mag1, mag2);
+        long long time_ms, tick, period_ms, values[3];
+        int valid, sensor_id;
+        if (line[0] == 'M' && sscanf(line, "M %lld %d %lld %lld %lld",
+                &time_ms, &sensor_id, &values[0], &values[1], &values[2]) == 5
+                && sensor_id >= 0) {
+            double mag[3];
+            for (int i = 0; i < 3; ++i) mag[i] = values[i] * 1e-9;
+            adcs_magnetometer(time_ms / 1000.0, sensor_id, mag);
         } else if (line[0] == 'S' && sscanf(line, "S %lld %d %lld %lld %lld",
                 &time_ms, &valid, &values[0], &values[1], &values[2]) == 5) {
             double vector[3];

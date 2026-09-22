@@ -22,7 +22,8 @@ class SitlTests(unittest.TestCase):
     def test_round_trip_and_partial_reply(self):
         controller = self.controller('''
 import sys, time
-assert input() == 'M 1000 10000 0 -10000 0 20000 0'
+assert input() == 'M 1000 0 10000 0 -10000'
+assert input() == 'M 1000 1 0 20000 0'
 assert input() == 'S 1000 1 32767 0 0'
 assert input() == 'S 1000 0 0 0 0'
 assert input() == 'T 7 1000 1000'
@@ -40,6 +41,20 @@ print('A 8 0 0 0 0', flush=True)
         np.testing.assert_allclose(dipole, [0.1, 0, -0.1])
         self.assertEqual(boom, 0.4)
         np.testing.assert_array_equal(controller.step(8, 2, 1)[0], [0, 0, 0])
+        controller.close()
+        self.assertEqual(controller.process.returncode, 0)
+
+    def test_all_magnetometers_have_distinct_ids(self):
+        controller = self.controller("""
+assert input() == 'M 125 0 1 -2 3'
+assert input() == 'M 125 1 4 5 -6'
+assert input() == 'M 125 2 -7 8 9'
+assert input() == 'T 0 125 1000'
+print('A 0 0 0 0 0', flush=True)
+""")
+        controller.magnetometers(0.125, [1e-9, -2e-9, 3e-9],
+                                 [4e-9, 5e-9, -6e-9], [-7e-9, 8e-9, 9e-9])
+        controller.step(0, 0.125, 1)
         controller.close()
         self.assertEqual(controller.process.returncode, 0)
 
@@ -91,7 +106,7 @@ print('A 8 0 0 0 0', flush=True)
                 controller.magnetometers(0, [0, 0, 0], [0, 0, 0])
                 controller.sun(0, None)
                 np.testing.assert_array_equal(controller.step(0, 0, 1)[0], [0, 0, 0])
-                controller.magnetometers(1, [1e-6, -1e-6, 0], [0, 0, 0])
+                controller.magnetometers(1, [1e-6, -1e-6, 0], [9e-5, 8e-5, 7e-5], [-1e-4, 0, 0])
                 dipole, boom = controller.step(1, 1, 1)
                 np.testing.assert_allclose(dipole, [-0.1, 0.1, 0])
                 self.assertEqual(boom, 0)

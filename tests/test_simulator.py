@@ -88,16 +88,40 @@ class SimulatorTests(unittest.TestCase):
         self.assertGreater(updated_inertia[0, 0], initial_inertia[0, 0])
         self.assertGreater(np.linalg.norm(sun_position_eci(config["simulation"]["start_utc"], 86400) - sun_position_eci(config["simulation"]["start_utc"], 0)), 1e9)
 
+    def test_configured_magnetometer_count_and_raw_frames(self):
+        for count in (1, 3):
+            config = copy.deepcopy(self.config)
+            mags = config['sensors']['magnetometers']
+            mags[:] = [copy.deepcopy(mags[i % len(mags)]) for i in range(count)]
+            for i, mag in enumerate(mags):
+                mag['noise_std_T'] = 0
+                mag['bias_T'] = [i * 1e-6, 0, 0]
+            with NamedTemporaryFile(mode='w', suffix='.yaml') as file:
+                yaml.safe_dump(config, file)
+                file.flush()
+                config = load_config(file.name)
+            plant = Plant(config)
+            readings = Sensors(config).magnetometers(plant)
+            self.assertEqual(len(readings), count)
+            body_field = np.asarray(RigidBodyKinematics.MRP2C(
+                plant.state()['attitude_mrp'])) @ plant.magnetic_field_n()
+            for mag, reading in zip(config['sensors']['magnetometers'], readings):
+                expected = np.asarray(mag['body_to_sensor']) @ body_field + mag['bias_T']
+                np.testing.assert_allclose(reading, expected, atol=1e-15, rtol=0)
+
     def test_independent_callback_rates(self):
         config = copy.deepcopy(self.config)
         config["simulation"].update(duration_s=2.0, output_csv=None)
+        config["sensors"]["magnetometers"].append(copy.deepcopy(config["sensors"]["magnetometers"][0]))
         calls = {"mag": 0, "sun": 0, "step": 0}
+        test = self
 
         class FakeController:
             def __init__(self, _):
                 pass
 
-            def magnetometers(self, *_):
+            def magnetometers(self, time_s, *readings):
+                test.assertEqual(len(readings), 3)
                 calls["mag"] += 1
 
             def sun(self, *_):
@@ -136,7 +160,7 @@ class SimulatorTests(unittest.TestCase):
 
             def board():
                 data = bytearray()
-                while len(lines) < 3:
+                while len(lines) < 4:
                     data.extend(os.read(master, 1024))
                     while b"\n" in data:
                         line, _, rest = data.partition(b"\n")
@@ -151,9 +175,10 @@ class SimulatorTests(unittest.TestCase):
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
             controller.sun(1.0, [1, 0, 0])
             dipole, boom = controller.step(7, 1.0, 1.0)
-            self.assertEqual(lines[0], "M 1000 10000 0 -10000 0 20000 0")
-            self.assertEqual(lines[1], "S 1000 1 32767 0 0")
-            self.assertEqual(lines[2], "T 7 1000 1000")
+            self.assertEqual(lines[0], "M 1000 0 10000 0 -10000")
+            self.assertEqual(lines[1], "M 1000 1 0 20000 0")
+            self.assertEqual(lines[2], "S 1000 1 32767 0 0")
+            self.assertEqual(lines[3], "T 7 1000 1000")
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)

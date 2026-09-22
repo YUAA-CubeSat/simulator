@@ -118,7 +118,7 @@ class Sensors:
             reading = np.asarray(mag["body_to_sensor"]) @ b_body + np.asarray(mag["bias_T"])
             reading += self.rng.normal(0, mag["noise_std_T"], 3)
             mags.append(reading.tolist())
-        return mags[0], mags[1]
+        return mags
 
     def sun(self, plant):
         state, c = plant.state(), self.config
