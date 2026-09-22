@@ -100,10 +100,21 @@ Run these utilities from the repository root after a simulation:
 ```
 
 The plots are saved to `plots/magnetorquers.png`, `plots/ggb_extension.png`,
-and `plots/angular_velocity.png`. They show applied X/Y/Z magnetic dipoles in
+and `plots/angular_velocity_body.png` (or `plots/angular_velocity_world.png`
+with `--frame world`). An explicit `-o/--output` overrides the default filename. They show applied X/Y/Z magnetic dipoles in
 A·m², actual gravity gradient boom extension in meters, and X/Y/Z body angular
 velocity plus its Euclidean magnitude in rad/s. X is roll, Y is pitch, and Z is
-yaw. All time axes use simulation seconds. Magnetorquer plots hold each sampled
+yaw. Use `--frame world` to express the same angular velocity in the fixed Earth
+centered inertial (ECI) axes, or `--frame body` for the default. World-frame plots
+use the recorded attitude (`sigma_BN_x`, `sigma_BN_y`, `sigma_BN_z`); rerun the
+simulation for older CSVs that lack these columns. The magnitude is unchanged.
+For example:
+
+```sh
+.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv --frame world
+```
+
+All time axes use simulation seconds. Magnetorquer plots hold each sampled
 value until the next sample; changes between telemetry samples cannot be recovered.
 
 The animation defaults to `plots/orbit.gif` and displays the recorded orbit in

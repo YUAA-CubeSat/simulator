@@ -29,7 +29,7 @@ def run(config):
             Path(output).parent.mkdir(parents=True, exist_ok=True)
             file = open(output, "w", newline="", encoding="utf-8")
             writer = csv.writer(file)
-            writer.writerow(["time_s", "x_m", "y_m", "z_m", "wx_rad_s", "wy_rad_s", "wz_rad_s", "boom_length_m", "Ixx_kg_m2", "Iyy_kg_m2", "Izz_kg_m2", "mx_Am2", "my_Am2", "mz_Am2", "Bx_T", "By_T", "Bz_T"])
+            writer.writerow(["time_s", "x_m", "y_m", "z_m", "wx_rad_s", "wy_rad_s", "wz_rad_s", "boom_length_m", "Ixx_kg_m2", "Iyy_kg_m2", "Izz_kg_m2", "mx_Am2", "my_Am2", "mz_Am2", "Bx_T", "By_T", "Bz_T", "sigma_BN_x", "sigma_BN_y", "sigma_BN_z"])
         periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}
         steps = round(sim["duration_s"] / plant.dt)
         applied = np.zeros(3)
@@ -50,7 +50,7 @@ def run(config):
                 state = plant.state()
                 inertia = np.asarray(plant.sc.scMassOutMsg.read().ISC_PntB_B)
                 writer.writerow([plant.time_s, *state["position_m"], *state["angular_rate_rad_s"], plant.boom_length,
-                                 inertia[0, 0], inertia[1, 1], inertia[2, 2], *applied, *plant.magnetic_field_n()])
+                                 inertia[0, 0], inertia[1, 1], inertia[2, 2], *applied, *plant.magnetic_field_n(), *state["attitude_mrp"]])
             if sim["clock"] == "realtime":
                 remaining = start + (tick + 1) * plant.dt - time.monotonic()
                 if remaining > 0:
