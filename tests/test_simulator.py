@@ -113,7 +113,7 @@ class SimulatorTests(unittest.TestCase):
         config = copy.deepcopy(self.config)
         config["simulation"].update(duration_s=2.0, output_csv=None)
         config["sensors"]["magnetometers"].append(copy.deepcopy(config["sensors"]["magnetometers"][0]))
-        calls = {"mag": 0, "sun": 0, "step": 0}
+        calls = {"mag": 0, "sun": 0, "battery": 0, "step": 0}
         test = self
 
         class FakeController:
@@ -128,15 +128,23 @@ class SimulatorTests(unittest.TestCase):
                 calls["sun"] += 1
 
             def step(self, *_):
+                test.assertEqual(calls["battery"], calls["step"] + 1)
                 calls["step"] += 1
                 return np.zeros(3), 0.0
+
+            def battery(self, time_s, soc, power_W):
+                test.assertEqual(time_s, calls["step"])
+                if time_s == 0:
+                    test.assertEqual(soc, 0.8)
+                    test.assertEqual(power_W, 0)
+                calls["battery"] += 1
 
             def close(self):
                 pass
 
         with patch("cubesat_sim.__main__.SitlController", FakeController):
             run(config)
-        self.assertEqual(calls, {"mag": 5, "sun": 2, "step": 2})
+        self.assertEqual(calls, {"mag": 5, "sun": 2, "battery": 2, "step": 2})
 
     def test_sun_sensor_uses_spacecraft_location_and_eclipse(self):
         config = copy.deepcopy(self.config)
@@ -160,7 +168,7 @@ class SimulatorTests(unittest.TestCase):
 
             def board():
                 data = bytearray()
-                while len(lines) < 4:
+                while len(lines) < 5:
                     data.extend(os.read(master, 1024))
                     while b"\n" in data:
                         line, _, rest = data.partition(b"\n")
@@ -174,11 +182,13 @@ class SimulatorTests(unittest.TestCase):
                                         on_receive=received.append)
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
             controller.sun(1.0, [1, 0, 0])
+            controller.battery(1.0, 0.8, -0.75)
             dipole, boom = controller.step(7, 1.0, 1.0)
             self.assertEqual(lines[0], "M 1000 0 10000 0 -10000")
             self.assertEqual(lines[1], "M 1000 1 0 20000 0")
             self.assertEqual(lines[2], "S 1000 1 32767 0 0")
-            self.assertEqual(lines[3], "T 7 1000 1000")
+            self.assertEqual(lines[3], "B 1000 800 -750")
+            self.assertEqual(lines[4], "T 7 1000 1000")
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)

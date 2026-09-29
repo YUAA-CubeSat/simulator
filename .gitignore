@@ -5,6 +5,6 @@ __pycache__/
 *.dylib
 *.dll
 *config.yaml
-telemetry.csv
+telemetry*.csv
 plots/
 adcs_example

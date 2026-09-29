@@ -26,6 +26,9 @@ assert input() == 'M 1000 0 10000 0 -10000'
 assert input() == 'M 1000 1 0 20000 0'
 assert input() == 'S 1000 1 32767 0 0'
 assert input() == 'S 1000 0 0 0 0'
+assert input() == 'B 1000 800 -1250'
+assert input() == 'B 1125 1000 2500'
+assert input() == 'B 1250 0 0'
 assert input() == 'T 7 1000 1000'
 sys.stdout.write('A 7 100000 ')
 sys.stdout.flush()
@@ -37,6 +40,9 @@ print('A 8 0 0 0 0', flush=True)
         controller.magnetometers(1, [1e-5, 0, -1e-5], [0, 2e-5, 0])
         controller.sun(1, [1, 0, 0])
         controller.sun(1, None)
+        controller.battery(1, 0.8, -1.25)
+        controller.battery(1.125, 1, 2.5)
+        controller.battery(1.25, 0, 0)
         dipole, boom = controller.step(7, 1, 1)
         np.testing.assert_allclose(dipole, [0.1, 0, -0.1])
         self.assertEqual(boom, 0.4)
@@ -105,8 +111,10 @@ print('A 0 0 0 0 0', flush=True)
             try:
                 controller.magnetometers(0, [0, 0, 0], [0, 0, 0])
                 controller.sun(0, None)
+                controller.battery(0, 0.8, 0)
                 np.testing.assert_array_equal(controller.step(0, 0, 1)[0], [0, 0, 0])
                 controller.magnetometers(1, [1e-6, -1e-6, 0], [9e-5, 8e-5, 7e-5], [-1e-4, 0, 0])
+                controller.battery(1, 0.799, -0.5)
                 dipole, boom = controller.step(1, 1, 1)
                 np.testing.assert_allclose(dipole, [-0.1, 0.1, 0])
                 self.assertEqual(boom, 0)

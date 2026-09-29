@@ -37,7 +37,7 @@ Existing shared-library configurations must replace `sitl.library` and the symbo
 
 SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. HITL also prints received USB/UART data above the bar as `USB RX: b'A ...\n'`. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
-`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the three ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, Sun, control, then propagation. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
+`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the three ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
 ## SITL/HITL line protocol
 
@@ -49,6 +49,7 @@ Each magnetometer sends its raw simulated reading in its configured sensor frame
 | --- | --- | --- |
 | Simulator → Controller | `M time_ms sensor_id x y z` | magnetic readings, nT |
 | Simulator → Controller | `S time_ms valid sx sy sz` | Sun body vector, signed Q15 (`32767` = 1) |
+| Simulator → Controller | `B time_ms soc_permille power_mW` | battery state of charge, 0–1000; signed net battery power, mW |
 | Simulator → Controller | `T tick time_ms period_ms` | run one "tick" of the firmware |
 | Controller → Simulator | `A tick mx my mz boom` | dipoles, µA·m²; boom target, mm |
 
@@ -58,23 +59,178 @@ Example exchange:
 M 1000 0 10000 0 -10000
 M 1000 1 0 20000 0
 S 1000 1 32767 0 0
+B 1000 800 -750
 T 5 1000 1000
 A 5 100000 0 -100000 500
 ```
 
-The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M` or `S`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. This replaces the previous two-sensor `M` format; controller firmware must update its parser. The example controller receives every sensor but uses only sensor 0 for B-dot control. At 115200 baud, the two sample `M` lines together take about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
+The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M`, `S`, or `B`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. This replaces the previous two-sensor `M` format; controller firmware must update its parser. The example controller receives every sensor but uses only sensor 0 for B-dot control. At 115200 baud, the two sample `M` lines together take about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
+
+`B time_ms soc_permille power_mW` is sent immediately before every `T`, using the
+same simulation timestamp, in both SITL and HITL. `soc_permille` is the current
+stored energy divided by capacity, multiplied by 1000 and rounded to the nearest
+integer (800 means 80.0%). `power_mW` is signed net **battery** power, rounded to
+the nearest milliwatt: positive means charging, negative means discharging, and
+zero means no stored-energy change. It includes charging losses and full/empty
+battery clamping; it is not gross panel output or actuator demand. For example,
+`B 1000 800 -750` reports 80.0% charge and 0.750 W discharge at one second.
+
+Power describes the last completed dynamics step, matching CSV `battery_power_W`,
+not the average since the previous control request. At time zero the message is
+`B 0 <round(battery_initial_soc * 1000)> 0` (for example, `B 0 800 0`
+with the supplied 0.8 setting): no dynamics interval has elapsed yet. Battery updates are independent
+of CSV output and `telemetry_period_s`. Controllers must add a `B` parser (or
+explicitly ignore it) before using this version; rebuild the example executable
+with the Quick start command. The C example decodes it into `adcs_battery(time_s,
+soc, power_W)` without changing its B-dot control law.
 
 ## Environment and physical model
 
 - The simulator evaluates Basilisk's [World Magnetic Model](https://hanspeterschaub.info/basilisk/Documentation/simulation/environment/magneticFieldWMM/magneticFieldWMM.html) from spacecraft position and simulation UTC. The included [NOAA WMM2025 coefficients](https://www.ncei.noaa.gov/products/world-magnetic-model/wmm-coefficients) cover 2025–2029. A custom coefficient file can be selected with `environment.wmm_coefficients`. Runs outside its five-year model interval are rejected.
 - Earth orientation is initialized from `simulation.start_utc` and updated before every WMM evaluation at `field_period_s`, including time zero. The planet-state message supplies the J2000-to-Earth-fixed rotation and its derivative, with Earth at the inertial origin. WMM transforms spacecraft position into Earth-fixed coordinates to evaluate the geographic field and returns the field in J2000 coordinates. CSV `Bx_T`, `By_T`, and `Bz_T` remain inertial components; sensors and magnetic torque use the subsequent body-frame rotation.
 - The dependency-free Earth-orientation approximation combines [IAU 1982 Greenwich mean sidereal time](https://github.com/liberfa/erfa/blob/master/src/gmst82.c) with [IAU 1976 precession from J2000](https://github.com/liberfa/erfa/blob/master/src/pmat76.c). UTC approximates UT1 for sidereal rotation and TT for precession. Nutation, polar motion, Earth-orientation corrections, and leap-second crossings are omitted. This includes the dominant daily rotation and date-dependent precession, but is not a precision ITRF transformation. No extra configuration is required. Telemetry generated before this change must be rerun to include the rotating geographic magnetic field.
-- A date-dependent solar ephemeris computes Earth-to-Sun direction. Subtracting the spacecraft position gives the local Sun vector; cylindrical Earth eclipse and sensor field of view determine visibility. This is a low precision solar position model intended for attitude sensing across long detumbling runs.
+- A date-dependent solar ephemeris computes Earth-to-Sun direction and distance. Subtracting the spacecraft position gives the local Sun vector. A finite solar disk and spherical Earth determine full and partial eclipse for both charging and sensor visibility. The Sun sensor reports a direction whenever some sunlight remains and the Sun center is within its field of view; sensor noise does not depend on illumination. This is a low precision solar position model intended for long detumbling runs.
 - Magnetorquer torque is **m × B** using the WMM field in the body frame. Each configured magnetometer has independent rotation, bias, and Gaussian noise.
 - The boom is a massless rod with a point tip mass. Extension changes Basilisk's spacecraft inertia and the gravity gradient torque. The inertia rate adds a reaction torque. `tip_mass_kg`, `axis_body`, initial and allowed lengths, and maximum extension speed are in the config. Flexible boom dynamics are not modeled.
 - The initial orbit state uses Earth centered inertial coordinates with J2000 mean equator/equinox axes. The template's orbit is near circular LEO. Central Earth gravity is used for propagation.
 
-`simulation.seed` makes sensor noise repeatable. CSV telemetry includes position, angular rate, applied dipoles, boom length, the three diagonal moments of inertia, and the WMM field. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
+`simulation.seed` makes sensor noise repeatable. CSV telemetry includes position, angular rate, applied dipoles, boom length, the three diagonal moments of inertia, the WMM field, and battery/power values described below. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
+
+## Battery and solar power
+
+Every run initializes stored energy to
+**`spacecraft.battery_initial_soc * spacecraft.battery_capacity_Wh`**.
+`battery_initial_soc` is a fraction from 0 to 1 inclusive: 0 is empty, 0.8 is 80%,
+and 1 is full. The supplied configs set 0.8; change this field to choose the starting charge.
+Capacity is usable energy in watt-hours, not amp-hours. Stored energy stays between
+zero and capacity. `config.example.yaml` includes the required power fields;
+copy these fields into older configs. Hardware values (10 Wh battery, 1 W nominal load, 0.5 W per
+magnetorquer, six 0.01 m² solar faces, and efficiencies) are illustrative and must
+be replaced with your spacecraft's values.
+
+| Configuration field under `spacecraft` | Meaning |
+| --- | --- |
+| `battery_capacity_Wh` | Positive finite usable battery energy capacity. |
+| `battery_initial_soc` | Finite initial state-of-charge fraction in [0, 1], including empty and full. |
+| `nominal_power_W` | Constant nonnegative finite bus demand in W, added to magnetorquer demand every dynamics step; set to zero to disable. |
+| `magnetorquer_max_power_W` | Three nonnegative finite electrical powers, X/Y/Z, at each axis's maximum absolute dipole. |
+| `solar_charging.irradiance_W_m2_at_1au` | Positive solar irradiance at one astronomical unit; example 1361 W/m². |
+| `solar_charging.conversion_efficiency` | Panel-to-bus wiring, MPPT and regulator efficiency, in (0, 1]. |
+| `solar_charging.battery_charge_efficiency` | Fraction of charger input power stored as battery energy, in (0, 1]. |
+| `solar_charging.max_charge_power_W` | Positive maximum charger **input** power, after solar power supplies nominal and actuator demand. |
+| `solar_charging.panels` | List of independently illuminated, fixed body-mounted panels; `[]` disables generation. |
+| `solar_charging.panels[].normal_body` | Outward-facing body-frame normal; a finite nonzero vector, normalized on loading. |
+| `solar_charging.panels[].area_m2` | Positive active solar-cell area, excluding unused face area. |
+| `solar_charging.panels[].efficiency` | Electrical cell conversion efficiency at the assumed operating condition, in (0, 1]. |
+
+`environment.sun_radius_m` sets the positive finite solar radius used by charging
+and Sun sensor eclipse geometry (example: 6.957 × 10⁸ m). Move the old
+`spacecraft.solar_charging.sun_radius_m` field into `environment` when updating
+older configs; the old location is no longer used.
+
+`spacecraft.nominal_power_W` represents continuous background consumption. It is
+independent of orientation, position, sunlight, and component activity. It applies
+even with all actuators idle, and continues to count as demand when the battery is
+empty. All supplied configs use an illustrative 1 W; replace it with the desired
+constant load. Existing battery plots and the `B` protocol message automatically
+include its effect on net battery power and stored energy after rerunning.
+
+Magnetorquer load is linear in the magnitude of the **applied, clipped** dipole:
+
+```text
+P_mtq = sum_i(P_max_i * abs(m_i) / m_max_i)
+```
+
+A zero maximum dipole disables that axis and contributes zero power. Reversing
+polarity leaves consumption unchanged. The linear law is the requested actuator
+approximation, not a coil resistance/current-squared model.
+
+Solar generation uses the actual spacecraft attitude and local Sun direction,
+independently of Sun sensor noise, field of view, or callback period:
+
+```text
+P_solar = irradiance_at_1au * (AU / distance_to_Sun)^2 * sunlight_fraction
+          * conversion_efficiency
+          * sum_panels(area * efficiency * max(0, normal_body dot sun_direction_body))
+```
+
+Panels collect direct sunlight on their front face only. The visible fraction of
+the Sun is calculated from the overlap of the apparent Earth and Sun disks,
+including full light, penumbra, umbra, and annular occultation. The geometry follows
+the [Basilisk eclipse disk-overlap model](https://hanspeterschaub.info/bskOlderDocs/bsk_1_7_5/Documentation/simulation/environment/eclipse/eclipse.html).
+The example solar irradiance and radius use
+[IAU 2015 Resolution B3 nominal values](https://iauarchive.eso.org/static/resolutions/IAU2015_English.pdf).
+The approximate solar elements refer to the equator/equinox of date; an inverse
+IAU 1976 precession rotation converts them to the spacecraft's J2000 frame before
+computing incidence and eclipse. This corrects a former frame mismatch of about
+0.373° at the example September 2026 epoch. Rerun older telemetry to include it.
+
+At each dynamics step, solar power is averaged between the start and end states
+(trapezoidal integration); magnetorquer demand is held over the step. For average
+surplus `S = P_solar - P_mtq - P_nominal`, the battery energy rate in watts is
+`min(S, max_charge_power_W) * battery_charge_efficiency` when `S > 0`, or `S`
+otherwise. Multiply by `step_s / 3600` to obtain the change in Wh and clamp to
+capacity. Discharge is ideal (100% efficiency). Generation beyond the charge
+limit or remaining capacity is discarded. Reduce `step_s` to resolve rapid
+tumbling, eclipse transitions, or battery saturation; events within a step are
+approximated by that step's average power.
+
+This is **power tracking only**: at empty, unmet demand is accumulated while
+commanded actuator dynamics continue. There is no brownout, controller reset, or
+automatic actuator shutdown. Battery state is available as `plant.power` and in
+CSV telemetry; the SITL/HITL `B` message sends state of charge and net battery power before each control request.
+
+Other components can be represented collectively by the constant nominal load.
+Individual activity-dependent draws from avionics, radio, payload, sensors,
+heaters, boom motor, and idle drivers/regulators are not separately modeled;
+choose the nominal value to cover the intended background consumption without
+double-counting the separately modeled magnetorquers.
+The model also omits self-discharge, aging, temperature evolution, voltage/current
+curves, charge taper, panel degradation, spacecraft/boom self-shadowing, Earth
+albedo, atmospheric refraction, solar limb darkening, and lunar eclipses. Panel
+efficiencies are fixed operating-point values. The spherical-Earth disk model and
+existing low precision ephemeris provide a geometric engineering approximation,
+not a thermal/electrical battery or high precision eclipse model.
+
+The following columns are appended to the existing CSV:
+
+| Column | Meaning |
+| --- | --- |
+| `battery_energy_Wh` | Stored energy at the row timestamp. |
+| `battery_soc` | Stored energy / capacity, from 0 to 1. |
+| `solar_power_W` | Available solar bus power, after conversion losses. |
+| `magnetorquer_power_W` | Total actuator electrical demand. |
+| `nominal_power_W` | Constant configured background electrical demand. |
+| `battery_power_W` | Actual stored-energy change rate; positive charging, negative discharging, includes capacity clamping. |
+| `sunlight_fraction` | Visible solar disk fraction at the row timestamp, from 0 to 1. |
+| `unserved_power_W` | Demand that the empty battery and solar generation could not supply. |
+| `unserved_energy_Wh` | Cumulative unmet demand since simulation start. |
+| `solar_energy_Wh` | Cumulative solar energy available at the bus, after panel/converter losses. |
+| `magnetorquer_energy_Wh` | Cumulative requested actuator energy, including unmet demand. |
+| `nominal_energy_Wh` | Cumulative nominal demand, including unmet demand; nominal power × elapsed seconds / 3600. |
+| `charging_loss_Wh` | Cumulative loss converting accepted charger input into stored energy. |
+| `curtailed_energy_Wh` | Cumulative surplus rejected by the charge-power limit or full battery. |
+
+Power columns average the **last dynamics step**, not the whole telemetry interval.
+Energy columns incorporate every dynamics step even when CSV sampling is sparse.
+As with existing telemetry, the first row is written after `telemetry_period_s`;
+the configured initial state is available on `Plant` construction, not as a time-zero row.
+
+Use the cumulative counters to audit energy, rather than integrating sparsely
+sampled power columns. Every row satisfies this balance, up to floating-point
+roundoff (all terms in Wh):
+
+```text
+battery_initial_soc * capacity + solar_energy_Wh + unserved_energy_Wh
+  = battery_energy_Wh + magnetorquer_energy_Wh + nominal_energy_Wh
+    + charging_loss_Wh + curtailed_energy_Wh
+```
+
+The counters start at zero and update every dynamics step. Curtailed energy
+includes rejected solar surplus; charging loss includes only energy accepted by
+the charger. Older CSVs lack these counters, and the intervening power history
+cannot be recovered exactly. See [the power audit](docs/power-audit.md) for checks,
+findings from the September 2026 recording, and hardware-calibration limitations.
 
 Run the focused tests with:
 
@@ -95,6 +251,7 @@ Run these utilities from the repository root after a simulation:
 ```sh
 .venv/bin/python -m utilities.plot_magnetorquers telemetry.csv
 .venv/bin/python -m utilities.plot_ggb telemetry.csv
+.venv/bin/python -m utilities.plot_battery telemetry.csv
 .venv/bin/python -m utilities.plot_angular_velocity telemetry.csv
 .venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml
 ```
@@ -114,17 +271,105 @@ For example:
 .venv/bin/python -m utilities.plot_angular_velocity telemetry.csv --frame world
 ```
 
+The battery utility saves `plots/battery.png`, with three panels sharing a time axis:
+
+- Battery level as a single curve, with **stored energy (Wh) on the left** and
+  **SoC (%) on the right**. Capacity is inferred from recorded energy/SoC to align
+  the two scales; no config is needed. An entirely empty recording only labels
+  zero on both axes because its capacity cannot be inferred.
+- Unsmoothed solar bus power and net battery power in W.
+- Smoothed charging power (positive, gold), discharging power (negative, red),
+  and their sum (net power, green).
+
+The bottom panel uses interval power derived from stored-energy changes, regardless
+of `--power-mode`. It splits that power into `max(P, 0)` and `min(P, 0)` before
+smoothing; these are battery charging/discharging contributions, not gross solar
+generation and electrical load. Opposite flows within a CSV interval cannot be
+separated from its net energy change. The same centered, time-weighted moving
+average is applied to each component, so their sum is the smoothed net power.
+The default window is **300 seconds**; change it with `--smooth-window-s 60`, for
+example. Irregular sample spacing is weighted by elapsed time, and recording-edge
+windows use only the available duration without padding with zeros. Smoothing uses
+the full recording before applying a display time window, so zooming does not
+change the filtered values. It is a display filter and does not alter simulation
+energy, telemetry, or the unsmoothed power panel.
+
+The power panel matches the orbit animation's colors: **yellow/gold solar bus power**
+and **green net battery power**, with a legend. Positive net power means charging;
+negative means discharging, with a dashed zero line.
+It reads `battery_soc`, `battery_energy_Wh`, and `solar_energy_Wh` directly from telemetry; no
+configuration file is needed. By default, power is the average over each interval
+between CSV rows: `3600 * (energy_next - energy_previous) / (time_next - time_previous)`.
+Solar power uses the change in `solar_energy_Wh` over the same interval.
+Each horizontal segment spans that exact interval. This includes all intermediate
+dynamics steps and matches the battery-energy curve, even when sampled power misses
+actuator pulses. No power is inferred before the first recorded energy sample;
+at least two rows are needed. This is an energy-derived interval mean, not a
+moving-average filter, and real rotation/eclipse variations remain visible.
+
+Use `--power-mode sampled` to inspect the original `solar_power_W` and `battery_power_W` samples,
+which describe only the last dynamics step at each CSV timestamp. With a 0.01 s
+dynamics step and 1 s telemetry, that is one step out of 100; it can miss actuator
+duty cycles and differ from the interval average. Generation and consumption are
+both integrated at `simulation.step_s`: solar is averaged across each step's
+endpoints and actuator commands are held over that same step. For supply/load
+comparisons over CSV intervals, likewise difference `solar_energy_Wh`,
+`magnetorquer_energy_Wh`, and `nominal_energy_Wh`, rather than comparing isolated
+power samples. Charge losses and curtailed/unserved energy complete the balance.
+
+During full eclipse, solar power is zero but magnetorquer demand can still vary.
+While energy remains in the battery, net power is exactly
+`-(nominal_power_W + magnetorquer_power_W)`. Pulsed actuation and changes in the
+commanded dipole therefore produce discharge fluctuations without sunlight.
+Measurement noise can also influence the controller's commands; the simulator
+does not add noise directly to power. With zero torquer demand, constant nominal
+load and no sunlight, discharge is constant until the battery empties.
+
+Use `--start-s` and `--end-s` to inspect individual rotation cycles instead of
+compressing hours of variation onto one plot, for example:
+
+```sh
+.venv/bin/python -m utilities.plot_battery telemetry.csv --start-s 2000 --end-s 2200 -o plots/battery_detail.png
+```
+
+Rerun the simulation if an older CSV lacks these columns. Use `-o/--output` to
+choose another output path or `--show` to also display the plot interactively.
+
 All time axes use simulation seconds. Magnetorquer plots hold each sampled
 value until the next sample; changes between telemetry samples cannot be recovered.
 
-The animation defaults to `plots/orbit.gif` and displays the recorded orbit in
-Earth centered inertial coordinates, with Earth drawn to scale. The Sun direction
-comes from the simulator's solar model using the supplied config's `start_utc`;
-use the config that produced the telemetry. Sun distance and marker sizes are
-reduced for visibility. The animation does not depict spacecraft attitude.
-Up to 300 frames span the complete recording at 20 frames per second, using
-linear position interpolation at evenly spaced simulation times. Sparse telemetry
-can therefore make the path between samples approximate.
+The animation defaults to `plots/orbit.gif` and synchronizes four views:
+
+- Recorded orbit position in J2000 Earth-centered inertial (ECI) coordinates,
+  with Earth drawn to scale and enlarged body axes at the spacecraft.
+- Spacecraft attitude in a fixed ECI close-up: a schematic cube, colored body
+  X/Y/Z axes, configured outward panel normals P1/P2/etc., and the Sun direction.
+  Body vectors use the transpose of the recorded inertial-to-body MRP rotation.
+  The cube and normal lengths are illustrative; physical panel mounting locations
+  and spacecraft dimensions are not defined by the configuration.
+- Recorded solar bus and net battery power, with a cursor at the frame timestamp.
+- Per-panel bus power estimated from orientation, configured active area and
+  efficiencies, inverse-square Sun distance, and recorded `sunlight_fraction`.
+  Eclipse state and recorded versus estimated total solar power are shown.
+
+Use the config that produced the telemetry. The Sun direction uses the actual
+spacecraft-to-Sun vector from the simulator's ephemeris and the config's epoch;
+only its drawn length is shortened. Gold panel normals receive sunlight; gray
+normals face away or are eclipsed. Panel estimates use endpoint geometry, while
+recorded power averages the last dynamics step, so small differences are expected.
+Larger differences can indicate a mismatched config or telemetry from an older
+solar model. No Basilisk installation is needed for the animation.
+
+Every frame uses position, attitude, illumination and power from the **same actual
+CSV row**. MRPs are never linearly interpolated, avoiding artifacts when equivalent
+MRP representations switch. By default up to 300 rows nearest uniformly spaced
+target times span the recording at 20 playback frames per second. Actual sample
+times and epoch timestamps appear above the figure; irregular telemetry yields
+approximate playback timing. Sampling cannot reconstruct rotations between rows,
+and a long run compressed into few frames can make rotation appear to jump or
+reverse. Increase `--frames` or select a shorter interval with `--start-s` and
+`--end-s` to inspect illumination changes. The time window is inclusive and uses
+only existing rows. Older CSVs must include attitude and power columns.
 
 All scripts accept an optional CSV path (default `telemetry.csv`), `-o/--output`,
 and `--show` to also open a window. Static plots support PNG, PDF, and SVG output.
@@ -132,6 +377,7 @@ The animation supports GIF and interactive HTML with playback controls:
 
 ```sh
 .venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml --frames 180 --fps 15 -o plots/orbit.html
+.venv/bin/python -m utilities.animate_orbit telemetry.csv --config software_config.yaml --start-s 900 --end-s 1200 --frames 301 -o plots/eclipse_exit.html
 .venv/bin/python -m utilities.plot_angular_velocity telemetry.csv -o plots/angular_velocity.svg --show
 ```
 

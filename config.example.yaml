@@ -22,6 +22,25 @@ spacecraft:
   bus_mass_kg: 2.0
   bus_inertia_kg_m2: [[0.012, 0.0, 0.0], [0.0, 0.010, 0.0], [0.0, 0.0, 0.008]]
   magnetorquer_max_dipole_Am2: [0.2, 0.2, 0.2]
+  # Example power hardware values: replace with measured flight hardware data.
+  nominal_power_W: 1.0      # example constant bus load; independent of all activity
+  battery_capacity_Wh: 10.0   # usable capacity
+  battery_initial_soc: 0.8  # initial state of charge, fraction in [0, 1]
+  magnetorquer_max_power_W: [0.5, 0.5, 0.5]  # X/Y/Z, at max absolute dipole
+  solar_charging:
+    irradiance_W_m2_at_1au: 1361.0
+    conversion_efficiency: 0.95  # wiring / MPPT / regulator, panel to bus
+    battery_charge_efficiency: 0.95  # bus surplus to stored energy
+    max_charge_power_W: 5.0  # charger input limit, after supplying nominal + actuator loads
+    # Active cell area, outward body normal, cell electrical efficiency.
+    # Example: six body-mounted faces; [] disables solar generation.
+    panels:
+      - {normal_body: [1, 0, 0], area_m2: 0.01, efficiency: 0.30}
+      - {normal_body: [-1, 0, 0], area_m2: 0.01, efficiency: 0.30}
+      - {normal_body: [0, 1, 0], area_m2: 0.01, efficiency: 0.30}
+      - {normal_body: [0, -1, 0], area_m2: 0.01, efficiency: 0.30}
+      - {normal_body: [0, 0, 1], area_m2: 0.01, efficiency: 0.30}
+      - {normal_body: [0, 0, -1], area_m2: 0.01, efficiency: 0.30}
   boom:
     tip_mass_kg: 0.15
     axis_body: [0.0, 0.0, 1.0]
@@ -31,6 +50,7 @@ spacecraft:
     max_speed_m_s: 0.05
 
 environment:
+  sun_radius_m: 6.957e8     # finite solar disk for umbra/penumbra
   earth_radius_m: 6378137.0
   earth_mu_m3_s2: 3.986004418e+14
   wmm_coefficients: ./data/WMM2025.COF

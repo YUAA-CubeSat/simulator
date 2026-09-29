@@ -41,6 +41,10 @@ class _LineController:
         values = [round(float(x) * 32767) for x in vector] if vector is not None else [0, 0, 0]
         self._send("S " + str(round(time_s * 1000)) + " " + str(int(vector is not None)) + " " + " ".join(map(str, values)))
 
+    def battery(self, time_s, soc, power_W):
+        """Send state of charge in permille and signed battery power in mW."""
+        self._send(f"B {round(time_s * 1000)} {round(soc * 1000)} {round(power_W * 1000)}")
+
     def step(self, tick, time_s, dt_s):
         self._send(f"T {tick} {round(time_s * 1000)} {round(dt_s * 1000)}")
         deadline = time.monotonic() + self.timeout

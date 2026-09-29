@@ -36,7 +36,7 @@ def load_config(path):
     sc["bus_mass_kg"] = float(sc["bus_mass_kg"])
     for key in ("tip_mass_kg", "initial_length_m", "min_length_m", "max_length_m", "max_speed_m_s"):
         sc["boom"][key] = float(sc["boom"][key])
-    for key in ("earth_radius_m", "earth_mu_m3_s2"):
+    for key in ("earth_radius_m", "earth_mu_m3_s2", "sun_radius_m"):
         env[key] = float(env[key])
     for mag in sensors["magnetometers"]:
         mag["noise_std_T"] = float(mag["noise_std_T"])
@@ -68,17 +68,45 @@ def load_config(path):
         o[key] = _vector(o[key], f"orbit.{key}").tolist()
     if np.linalg.norm(o["position_m"]) <= float(env["earth_radius_m"]):
         raise ValueError("initial position must be above Earth")
-    for key in ("magnetorquer_max_dipole_Am2",):
+    for key in ("magnetorquer_max_dipole_Am2", "magnetorquer_max_power_W"):
         sc[key] = _vector(sc[key], key).tolist()
         if np.any(np.asarray(sc[key]) < 0):
             raise ValueError(f"{key} must be nonnegative")
+    sc["battery_capacity_Wh"] = float(sc["battery_capacity_Wh"])
+    sc["battery_initial_soc"] = float(sc["battery_initial_soc"])
+    if not math.isfinite(sc["battery_initial_soc"]) or not 0 <= sc["battery_initial_soc"] <= 1:
+        raise ValueError("battery_initial_soc must be finite and between 0 and 1")
+    sc["nominal_power_W"] = float(sc["nominal_power_W"])
+    if not math.isfinite(sc["nominal_power_W"]) or sc["nominal_power_W"] < 0:
+        raise ValueError("nominal_power_W must be nonnegative and finite")
+    if not math.isfinite(sc["battery_capacity_Wh"]) or sc["battery_capacity_Wh"] <= 0:
+        raise ValueError("battery_capacity_Wh must be positive and finite")
+    solar = sc["solar_charging"]
+    for key in ("irradiance_W_m2_at_1au", "max_charge_power_W",
+                "conversion_efficiency", "battery_charge_efficiency"):
+        solar[key] = float(solar[key])
+        if not math.isfinite(solar[key]) or solar[key] <= 0:
+            raise ValueError(f"solar_charging.{key} must be positive and finite")
+    for key in ("conversion_efficiency", "battery_charge_efficiency"):
+        if solar[key] > 1:
+            raise ValueError(f"solar_charging.{key} must be at most 1")
+    if not isinstance(solar["panels"], list):
+        raise ValueError("solar_charging.panels must be a list (empty disables generation)")
+    for i, panel in enumerate(solar["panels"]):
+        panel["normal_body"] = _vector(panel["normal_body"], f"solar panel {i} normal_body", True).tolist()
+        for key in ("area_m2", "efficiency"):
+            panel[key] = float(panel[key])
+            if not math.isfinite(panel[key]) or panel[key] <= 0:
+                raise ValueError(f"solar panel {i} {key} must be positive and finite")
+        if panel["efficiency"] > 1:
+            raise ValueError(f"solar panel {i} efficiency must be at most 1")
     boom = sc["boom"]
     boom["axis_body"] = _vector(boom["axis_body"], "boom.axis_body", True).tolist()
     if not (0 <= boom["min_length_m"] <= boom["initial_length_m"] <= boom["max_length_m"]):
         raise ValueError("boom length limits are invalid")
     if any(not math.isfinite(boom[k]) for k in ("tip_mass_kg", "initial_length_m", "min_length_m", "max_length_m", "max_speed_m_s")) or boom["tip_mass_kg"] < 0 or boom["max_speed_m_s"] <= 0:
         raise ValueError("boom mass or speed is invalid")
-    if any(not math.isfinite(env[k]) or env[k] <= 0 for k in ("earth_radius_m", "earth_mu_m3_s2")):
+    if any(not math.isfinite(env[k]) or env[k] <= 0 for k in ("earth_radius_m", "earth_mu_m3_s2", "sun_radius_m")):
         raise ValueError("environment values must be positive")
     env["wmm_coefficients"] = str((path.parent / env["wmm_coefficients"]).resolve())
     if not Path(env["wmm_coefficients"]).is_file():

@@ -6,6 +6,14 @@ static double previous_mag[3], current_mag[3], previous_time, current_time;
 static int have_current, have_previous;
 static double sun_body[3];
 static int sun_valid;
+static double battery_soc, battery_power_W;
+
+void adcs_battery(double time_s, double soc, double power_W)
+{
+    (void)time_s;
+    battery_soc = soc;
+    battery_power_W = power_W;
+}
 
 void adcs_magnetometer(double time_s, int sensor_id, const double mag_T[3])
 {
@@ -34,6 +42,9 @@ int adcs_step(double time_s, double dt_s, double dipole_Am2[3], double *boom_len
     (void)dt_s;
     (void)sun_valid;
     (void)sun_body;
+    /* Available for power-aware control; this example keeps B-dot unchanged. */
+    (void)battery_soc;
+    (void)battery_power_W;
     if (!dipole_Am2 || !boom_length_m) return 1;
     for (int i = 0; i < 3; ++i) {
         double command = 0.0;
@@ -65,6 +76,10 @@ int main(void)
             double vector[3];
             for (int i = 0; i < 3; ++i) vector[i] = values[i] / 32767.0;
             adcs_sun(time_ms / 1000.0, vector, valid);
+        } else if (line[0] == 'B' && sscanf(line, "B %lld %lld %lld",
+                &time_ms, &values[0], &values[1]) == 3
+                && values[0] >= 0 && values[0] <= 1000) {
+            adcs_battery(time_ms / 1000.0, values[0] / 1000.0, values[1] / 1000.0);
         } else if (line[0] == 'T' && sscanf(line, "T %lld %lld %lld",
                 &tick, &time_ms, &period_ms) == 3) {
             double dipole[3], boom;

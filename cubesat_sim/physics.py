@@ -9,6 +9,7 @@ from Basilisk.utilities import SimulationBaseClass, macros, simIncludeGravBody, 
 from .config import _vector
 from .earth import EarthOrientation
 from .sun import sun_position_eci
+from .power import PowerSystem, sunlight_fraction
 
 
 def inertia_at_length(sc, length):
@@ -68,6 +69,8 @@ class Plant:
         self.sim.InitializeSimulation()
         self.sim.ConfigureStopTime(0)
         self.sim.ExecuteSimulation()
+        self.power = PowerSystem(config)
+        self.power.solar_power_W, self.power.sunlight_fraction = self.power.solar_power(self.state(), 0.0)
 
     def magnetic_field_n(self):
         return np.asarray(self.wmm.envOutMsgs[0].read().magField_N)
@@ -87,6 +90,7 @@ class Plant:
         inertia = inertia_at_length(cfg["spacecraft"], self.boom_length)
         self.sc.hub.IHubPntBc_B = inertia.tolist()
         state = self.state()
+        solar_start_W, _ = self.power.solar_power(state, self.time_s)
         dcm_bn = np.asarray(RigidBodyKinematics.MRP2C(state["attitude_mrp"]))
         b_body = dcm_bn @ self.magnetic_field_n()
         rhat_body = dcm_bn @ (state["position_m"] / np.linalg.norm(state["position_m"]))
@@ -101,6 +105,8 @@ class Plant:
         self.time_s = self._time_ns / 1e9
         self.sim.ConfigureStopTime(self._time_ns)
         self.sim.ExecuteSimulation()
+        solar_end_W, self.power.sunlight_fraction = self.power.solar_power(self.state(), self.time_s)
+        self.power.advance(dipole, self.dt, solar_start_W, solar_end_W)
         return dipole
 
 
@@ -124,10 +130,11 @@ class Sensors:
         state, c = plant.state(), self.config
         dcm_bn = np.asarray(RigidBodyKinematics.MRP2C(state["attitude_mrp"]))
         r = state["position_m"]
-        sun_r = sun_position_eci(c["simulation"]["start_utc"], plant.time_s) - r
+        sun_position = sun_position_eci(c["simulation"]["start_utc"], plant.time_s)
+        sun_r = sun_position - r
         sun_n = sun_r / np.linalg.norm(sun_r)
         radius = c["environment"]["earth_radius_m"]
-        eclipse = np.dot(r, sun_n) < 0 and np.linalg.norm(r - np.dot(r, sun_n) * sun_n) < radius
+        eclipse = sunlight_fraction(r, sun_position, radius, c["environment"]["sun_radius_m"]) == 0
         sun_b = dcm_bn @ sun_n
         sun_cfg = c["sensors"]["sun_sensor"]
         boresight = _vector(sun_cfg["boresight_body"], "boresight", True)
