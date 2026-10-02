@@ -11,6 +11,7 @@ simulation:
   seed: 42
   output_csv: telemetry.csv
   telemetry_period_s: 1.0
+  checkpoint_steps: 1000      # sync CSV every N dynamics steps; 0 disables
 
 orbit:
   position_m: [6878137.0, 0.0, 0.0]

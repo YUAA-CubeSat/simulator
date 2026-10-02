@@ -33,6 +33,9 @@ def load_config(path):
         raise ValueError("simulation.start_utc must include a UTC offset")
     s["start_utc"] = start.astimezone(timezone.utc).isoformat()
     s["seed"] = int(s["seed"])
+    s.setdefault("checkpoint_steps", 1000)
+    if type(s["checkpoint_steps"]) is not int or s["checkpoint_steps"] < 0:
+        raise ValueError("simulation.checkpoint_steps must be a nonnegative integer (0 disables checkpointing)")
     sc["bus_mass_kg"] = float(sc["bus_mass_kg"])
     for key in ("tip_mass_kg", "initial_length_m", "min_length_m", "max_length_m", "max_speed_m_s"):
         sc["boom"][key] = float(sc["boom"][key])

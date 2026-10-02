@@ -8,3 +8,4 @@ __pycache__/
 telemetry*.csv
 plots/
 adcs_example
+.DS_Store

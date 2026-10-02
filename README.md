@@ -14,6 +14,30 @@ cp config.example.yaml config.yaml
 
 The example executable uses basic B-dot control and keeps the boom retracted. Replace it with your ADCS implementation in any language. The output CSV is written beside the config file.
 
+Press **Ctrl+C** to stop a run. The CLI exits without a KeyboardInterrupt traceback
+(exit status 130) and reports the telemetry path. Buffered CSV rows are flushed
+and the file is closed **before** controller cleanup, so a controller shutdown
+failure does not discard the recorded data. If interruption occurs between
+dynamics steps, the last completed state is also saved when it is newer than the
+last scheduled telemetry row; this final row may fall between the usual sampling
+times. A partially executed dynamics step is not written. Interruption during
+controller startup leaves a valid CSV header if output was opened, and no rows
+until dynamics have completed.
+
+`simulation.checkpoint_steps: 1000` saves a telemetry checkpoint every 1000
+completed dynamics steps (the default when omitted). Set it to `0` to disable
+periodic checkpoints; otherwise it must be a positive integer. The interval in
+simulated seconds is `checkpoint_steps * step_s`, independent of control and
+telemetry periods. Each checkpoint writes the latest completed state if it is
+not already a scheduled CSV row, then flushes the CSV and calls `fsync` to sync
+it to disk. Coincident sampling and checkpoints produce only one row. Normal
+exit and Ctrl+C also flush and sync remaining rows before controller cleanup.
+Checkpoints append to `output_csv` (normally `telemetry.csv`); they do not create
+separate files or save the controller/dynamics state needed to resume a run.
+They have no effect when CSV output is disabled. A forced termination can lose
+data acquired since the latest checkpoint; smaller intervals reduce that window
+at the cost of more disk I/O and potentially more CSV rows.
+
 ## SITL subprocess
 
 Set `simulation.mode: sitl` and configure an executable and its arguments as a YAML list:
@@ -213,7 +237,8 @@ The following columns are appended to the existing CSV:
 
 Power columns average the **last dynamics step**, not the whole telemetry interval.
 Energy columns incorporate every dynamics step even when CSV sampling is sparse.
-As with existing telemetry, the first row is written after `telemetry_period_s`;
+The first row is written at the first telemetry sample or enabled checkpoint,
+whichever comes first (or earlier on a graceful interrupt);
 the configured initial state is available on `Plant` construction, not as a time-zero row.
 
 Use the cumulative counters to audit energy, rather than integrating sparsely
