@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from .config import load_config
 from .io import HitlController, SitlController
-from .physics import Plant, Sensors
 
 
 def telemetry_row(plant, applied):
@@ -29,6 +28,11 @@ def telemetry_row(plant, applied):
 
 
 def run(config):
+    if config["simulation"]["mode"] == "orbit_solar":
+        from .orbit_solar import run as run_orbit_solar
+        return run_orbit_solar(config)
+    from .physics import Plant, Sensors
+
     plant = Plant(config)
     sensors = Sensors(config)
     sim = config["simulation"]
@@ -118,7 +122,7 @@ def run(config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Basilisk CubeSat SITL/HITL simulator")
+    parser = argparse.ArgumentParser(description="CubeSat SITL/HITL and orbit-only solar simulator")
     parser.add_argument("config", help="YAML configuration file")
     args = parser.parse_args()
     try:

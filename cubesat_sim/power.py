@@ -1,7 +1,6 @@
 """Solar generation and battery energy accounting (SI power, Wh energy)."""
 
 import numpy as np
-from Basilisk.utilities import RigidBodyKinematics
 
 from .sun import AU_M, sun_position_eci
 
@@ -61,6 +60,8 @@ class PowerSystem:
 
     def solar_power(self, state, time_s):
         """Available bus power after panel and power-converter losses."""
+        from Basilisk.utilities import RigidBodyKinematics
+
         cfg = self.config
         solar = cfg["spacecraft"]["solar_charging"]
         r = state["position_m"]

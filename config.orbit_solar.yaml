@@ -1,0 +1,26 @@
+simulation:
+  mode: orbit_solar
+  clock: simulated
+  start_utc: "2026-09-18T00:00:00Z"
+  duration_s: 86400.0
+  step_s: 10.0
+  telemetry_period_s: 60.0
+  checkpoint_steps: 1000
+  output_csv: orbit_solar.csv
+
+orbit:
+  position_m: [6878137.0, 0.0, 0.0]
+  velocity_m_s: [0.0, 7612.6, 0.0]
+
+environment:
+  earth_radius_m: 6378137.0
+  earth_mu_m3_s2: 3.986004418e+14
+  sun_radius_m: 6.957e8
+
+solar:
+  # Assumed projected collecting area, independent of orientation.
+  # Example: 0.06 m² total one-sided panel area / 4 for an isotropic average.
+  effective_area_m2: 0.015
+  efficiency: 0.30
+  conversion_efficiency: 0.95
+  irradiance_W_m2_at_1au: 1361.0

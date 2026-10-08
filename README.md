@@ -38,6 +38,60 @@ They have no effect when CSV output is disabled. A forced termination can lose
 data acquired since the latest checkpoint; smaller intervals reduce that window
 at the cost of more disk I/O and potentially more CSV rows.
 
+## Orbit and solar production only
+
+Run the independent `orbit_solar` mode and its plotter:
+
+```sh
+.venv/bin/python -m cubesat_sim config.orbit_solar.yaml
+.venv/bin/python -m utilities.plot_solar orbit_solar.csv -o plots/solar.png
+```
+
+This mode propagates a bound Keplerian orbit in the J2000 frame under spherical
+Earth point-mass gravity. It solves the two-body ellipse directly; it does not
+advance attitude or instantiate Basilisk dynamics, sensors, WMM, SITL, or HITL.
+Only the `simulation`, `orbit` (position and velocity), `environment` (Earth
+radius, gravitational parameter, Sun radius), and `solar` sections are needed.
+Unbound, radial, and Earth-intersecting orbits are rejected. J2, drag, and
+third-body perturbations are not included.
+
+Solar generation uses the existing time-varying solar ephemeris, inverse-square
+irradiance, and finite-disk Earth eclipse model (including penumbra).
+`solar.effective_area_m2` is an **assumed projected collecting area**, before
+cell efficiency, that stays constant regardless of orientation. Choose it for
+your scenario: a Sun-facing panel's active area, or total one-sided panel area
+divided by four for an ideal isotropic orientation average. The example uses
+0.015 m², 30% cell efficiency, and 95% conversion efficiency. It does not predict
+actual attitude-dependent panel illumination. Power is:
+
+```text
+irradiance_at_1au × (AU / spacecraft_to_sun_distance)²
+× visible_sun_fraction × effective_area × efficiency × conversion_efficiency
+```
+
+Energy means available electrical energy at the bus, before battery charge
+limits, storage losses, curtailment, or loads. None of those are simulated.
+Zero effective area disables generation without disabling orbit/eclipse output.
+
+The CSV includes time, position, velocity, instantaneous `solar_power_W`,
+`sunlight_fraction`, cumulative `solar_energy_Wh`, and `orbit_period_s`.
+Energy is trapezoidally integrated at every `step_s`, independently of telemetry
+spacing. Initial and final samples are always saved, with extra samples on both
+sides of transitions into/out of full umbra. Checkpoint flushing and Ctrl+C
+saving are supported. Decrease `step_s` to check convergence near eclipse
+boundaries; a coarse step can miss short eclipses altogether.
+
+The plotter shows cumulative energy, interval-average power with visible Sun
+fraction, energy per orbital period measured from the simulation epoch, and
+energy per sunrise-to-sunrise cycle. Sunrise is the first integration sample
+with positive visible Sun after full umbra, so its timing has step-size
+precision. Orbit-boundary energies are interpolated between cumulative samples;
+reduce `telemetry_period_s` for finer allocation. Incomplete first/last cycles
+and the last partial orbit are marked separately and excluded from printed
+complete-interval averages. Continuous sunlight or eclipses without two recorded
+sunrises produce no complete sun cycle. All segment energies still sum to the
+energy produced over the recorded interval. Add `--show` for an interactive plot.
+
 ## SITL subprocess
 
 Set `simulation.mode: sitl` and configure an executable and its arguments as a YAML list:
@@ -363,7 +417,8 @@ choose another output path or `--show` to also display the plot interactively.
 All time axes use simulation seconds. Magnetorquer plots hold each sampled
 value until the next sample; changes between telemetry samples cannot be recovered.
 
-The animation defaults to `plots/orbit.gif` and synchronizes four views:
+The animation defaults to `plots/orbit.gif` and selects its layout from the CSV
+columns. With complete attitude and power telemetry, it synchronizes four views:
 
 - Recorded orbit position in J2000 Earth-centered inertial (ECI) coordinates,
   with Earth drawn to scale and enlarged body axes at the spacecraft.
@@ -394,7 +449,23 @@ approximate playback timing. Sampling cannot reconstruct rotations between rows,
 and a long run compressed into few frames can make rotation appear to jump or
 reverse. Increase `--frames` or select a shorter interval with `--start-s` and
 `--end-s` to inspect illumination changes. The time window is inclusive and uses
-only existing rows. Older CSVs must include attitude and power columns.
+only existing rows.
+
+For `orbit_solar` runs or older CSVs without the complete attitude and power
+columns, the utility displays only the orbit animation: Earth, the recorded
+satellite path and position, the Sun direction, and timestamps. No spacecraft
+panel configuration or controller data is required. The minimum CSV columns are
+`time_s`, `x_m`, `y_m`, and `z_m`; the config needs `simulation.start_utc` and
+`environment.earth_radius_m`. The four-view dashboard additionally requires all
+three `sigma_BN_*` columns, `solar_power_W`, `battery_power_W`, and
+`sunlight_fraction`, plus `spacecraft.solar_charging` in the config.
+
+```sh
+.venv/bin/python -m utilities.animate_orbit orbit_solar.csv --config config.orbit_solar.yaml -o plots/orbit_solar.html
+```
+
+Use `utilities.plot_solar` for the separate energy-production plots from an
+orbit-only run.
 
 All scripts accept an optional CSV path (default `telemetry.csv`), `-o/--output`,
 and `--show` to also open a window. Static plots support PNG, PDF, and SVG output.

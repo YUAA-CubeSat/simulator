@@ -25,6 +25,9 @@ def load_config(path):
         c = yaml.safe_load(f)
     if not isinstance(c, dict):
         raise ValueError("Configuration must be a YAML mapping")
+    if c.get("simulation", {}).get("mode") == "orbit_solar":
+        from .orbit_solar import validate_config
+        return validate_config(c, path)
     s, o, sc, env, sensors = (c[k] for k in ("simulation", "orbit", "spacecraft", "environment", "sensors"))
     for key in ("duration_s", "step_s", "magnetometer_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):
         s[key] = float(s[key])

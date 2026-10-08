@@ -1,5 +1,6 @@
-"""Animate recorded orbit, attitude, panel illumination, and power together."""
+"""Animate an orbit, adding attitude, panel illumination, and power when recorded."""
 
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +13,20 @@ from utilities.plot_angular_velocity import body_to_world
 
 COLUMNS = ("x_m", "y_m", "z_m", "sigma_BN_x", "sigma_BN_y", "sigma_BN_z",
            "solar_power_W", "battery_power_W", "sunlight_fraction")
+
+
+def load_animation_telemetry(path):
+    """Use the full dashboard only when its complete telemetry is available.
+
+    Orbit-only runs have no attitude or battery/controller state. Do not fill
+    those quantities with invented zeros or require spacecraft panel settings.
+    """
+    with path.open(newline="", encoding="utf-8-sig") as source:
+        available = set(csv.DictReader(source).fieldnames or [])
+    full_dashboard = set(COLUMNS).issubset(available)
+    columns = COLUMNS if full_dashboard else COLUMNS[:3]
+    time, data = load_telemetry(path, columns)
+    return time, data, full_dashboard
 
 
 def frame_indices(time, maximum, start_s=None, end_s=None):
@@ -77,12 +92,7 @@ def main():
         cli.error("--frames must be at least 2 and --fps must be positive")
     if args.output.suffix.lower() not in (".gif", ".html"):
         cli.error("animation output must have a .gif or .html extension")
-    try:
-        time, data = load_telemetry(args.csv, COLUMNS)
-    except ValueError as exc:
-        if "Missing telemetry columns" in str(exc):
-            raise ValueError(f"{exc}. Animation requires recorded attitude and power; rerun the simulation.") from exc
-        raise
+    time, data, full_dashboard = load_animation_telemetry(args.csv)
     with args.config.open() as source:
         config = yaml.safe_load(source)
     try:
@@ -92,33 +102,44 @@ def main():
         if epoch.utcoffset() is None:
             raise ValueError("simulation.start_utc must include a timezone")
         radius = float(config["environment"]["earth_radius_m"]) / 1000
-        solar = config["spacecraft"]["solar_charging"]
-        normals, area_efficiency = panel_parameters(config)
-        for key in ("irradiance_W_m2_at_1au", "conversion_efficiency"):
-            if not np.isfinite(float(solar[key])) or float(solar[key]) <= 0:
-                raise ValueError(f"solar_charging.{key} must be finite and positive")
-        if float(solar["conversion_efficiency"]) > 1:
-            raise ValueError("solar_charging.conversion_efficiency must be at most 1")
+        if full_dashboard:
+            solar = config["spacecraft"]["solar_charging"]
+            normals, area_efficiency = panel_parameters(config)
+            for key in ("irradiance_W_m2_at_1au", "conversion_efficiency"):
+                if not np.isfinite(float(solar[key])) or float(solar[key]) <= 0:
+                    raise ValueError(f"solar_charging.{key} must be finite and positive")
+            if float(solar["conversion_efficiency"]) > 1:
+                raise ValueError("solar_charging.conversion_efficiency must be at most 1")
     except (KeyError, TypeError, AttributeError) as exc:
-        raise ValueError("Config requires simulation.start_utc, environment.earth_radius_m, and spacecraft.solar_charging") from exc
+        required = "simulation.start_utc and environment.earth_radius_m"
+        if full_dashboard:
+            required += ", plus spacecraft.solar_charging for the full dashboard"
+        raise ValueError(f"Config requires {required}") from exc
     if not np.isfinite(radius) or radius <= 0:
         raise ValueError("Earth radius must be finite and positive")
-    if np.any((data[:, 8] < 0) | (data[:, 8] > 1)):
+    if full_dashboard and np.any((data[:, 8] < 0) | (data[:, 8] > 1)):
         raise ValueError("Recorded sunlight_fraction must be between 0 and 1")
     frames, selected = frame_indices(time, args.frames, args.start_s, args.end_s)
-    geometry = [frame_geometry(start, time[i], data[i], normals, area_efficiency, solar) for i in frames]
+    if full_dashboard:
+        geometry = [frame_geometry(start, time[i], data[i], normals, area_efficiency, solar) for i in frames]
+    else:
+        sun_vectors = np.array([sun_position_eci(start, time[i]) - data[i, :3] for i in frames])
+        sun_directions = sun_vectors / np.linalg.norm(sun_vectors, axis=1)[:, None]
     position = data[:, :3] / 1000
     extent = max(radius, np.linalg.norm(position[selected], axis=1).max())
     plt = pyplot(args.show)
     from matplotlib.animation import FuncAnimation, PillowWriter
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    fig = plt.figure(figsize=(14, 10), layout="constrained")
-    grid = fig.add_gridspec(2, 2, height_ratios=(2, 1))
-    orbit_ax = fig.add_subplot(grid[0, 0], projection="3d")
-    attitude_ax = fig.add_subplot(grid[0, 1], projection="3d")
-    power_ax = fig.add_subplot(grid[1, 0])
-    panels_ax = fig.add_subplot(grid[1, 1])
+    fig = plt.figure(figsize=(14, 10) if full_dashboard else (9, 9), layout="constrained")
+    if full_dashboard:
+        grid = fig.add_gridspec(2, 2, height_ratios=(2, 1))
+        orbit_ax = fig.add_subplot(grid[0, 0], projection="3d")
+        attitude_ax = fig.add_subplot(grid[0, 1], projection="3d")
+        power_ax = fig.add_subplot(grid[1, 0])
+        panels_ax = fig.add_subplot(grid[1, 1])
+    else:
+        orbit_ax = fig.add_subplot(111, projection="3d")
     longitude, latitude = np.meshgrid(np.linspace(0, 2 * np.pi, 40), np.linspace(0, np.pi, 20))
     orbit_ax.plot_surface(radius * np.cos(longitude) * np.sin(latitude),
                           radius * np.sin(longitude) * np.sin(latitude), radius * np.cos(latitude),
@@ -128,7 +149,8 @@ def main():
     orbit_ax.plot(*position[overview].T, color="gray", alpha=0.5)
     satellite, = orbit_ax.plot([], [], [], "o", color="red", markersize=7, label="Satellite")
     sun_ray, = orbit_ax.plot([], [], [], color="goldenrod", linewidth=2, label="Toward Sun (length reduced)")
-    orbit_axes = [orbit_ax.plot([], [], [], color=c, linewidth=2)[0] for c in ("C3", "C2", "C0")]
+    if full_dashboard:
+        orbit_axes = [orbit_ax.plot([], [], [], color=c, linewidth=2)[0] for c in ("C3", "C2", "C0")]
     limit = extent * 1.6
     orbit_ax.set(xlim=(-limit, limit), ylim=(-limit, limit), zlim=(-limit, limit),
                  xlabel="ECI X (km)", ylabel="ECI Y (km)", zlabel="ECI Z (km)",
@@ -136,67 +158,72 @@ def main():
     orbit_ax.set_box_aspect((1, 1, 1))
     orbit_ax.legend(loc="lower left", fontsize=8)
 
-    # Configs define panel normals/areas, not physical mounting positions.
-    vertices = np.array([[x, y, z] for x in (-0.5, 0.5) for y in (-0.5, 0.5) for z in (-0.5, 0.5)])
-    faces = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]]
-    body = Poly3DCollection([], facecolor="slategray", edgecolor="black", alpha=0.15)
-    attitude_ax.add_collection3d(body)
-    body_axes = [attitude_ax.plot([], [], [], color=c, linewidth=2, label=f"Body {name}")[0]
-                 for c, name in zip(("C3", "C2", "C0"), "XYZ")]
-    labels = [attitude_ax.text(0, 0, 0, name, color=c) for name, c in zip("XYZ", ("C3", "C2", "C0"))]
-    local_sun, = attitude_ax.plot([], [], [], color="goldenrod", marker="o", markevery=[-1],
-                                  linewidth=3, label="Toward Sun")
-    panel_lines = [attitude_ax.plot([], [], [], color="gold", marker="o", markersize=4)[0] for _ in normals]
-    panel_labels = [attitude_ax.text(0, 0, 0, f"P{i + 1}", fontsize=8) for i in range(len(normals))]
-    attitude_ax.set(xlim=(-1.8, 1.8), ylim=(-1.8, 1.8), zlim=(-1.8, 1.8),
-                    xlabel="ECI X", ylabel="ECI Y", zlabel="ECI Z",
-                    title="Attitude · schematic body and panel normals\nFixed ECI view; not to scale")
-    attitude_ax.set_box_aspect((1, 1, 1))
-    attitude_ax.legend(loc="upper left", fontsize=8)
+    if full_dashboard:
+        # Configs define panel normals/areas, not physical mounting positions.
+        vertices = np.array([[x, y, z] for x in (-0.5, 0.5) for y in (-0.5, 0.5) for z in (-0.5, 0.5)])
+        faces = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]]
+        body = Poly3DCollection([], facecolor="slategray", edgecolor="black", alpha=0.15)
+        attitude_ax.add_collection3d(body)
+        body_axes = [attitude_ax.plot([], [], [], color=c, linewidth=2, label=f"Body {name}")[0]
+                     for c, name in zip(("C3", "C2", "C0"), "XYZ")]
+        labels = [attitude_ax.text(0, 0, 0, name, color=c) for name, c in zip("XYZ", ("C3", "C2", "C0"))]
+        local_sun, = attitude_ax.plot([], [], [], color="goldenrod", marker="o", markevery=[-1],
+                                      linewidth=3, label="Toward Sun")
+        panel_lines = [attitude_ax.plot([], [], [], color="gold", marker="o", markersize=4)[0] for _ in normals]
+        panel_labels = [attitude_ax.text(0, 0, 0, f"P{i + 1}", fontsize=8) for i in range(len(normals))]
+        attitude_ax.set(xlim=(-1.8, 1.8), ylim=(-1.8, 1.8), zlim=(-1.8, 1.8),
+                        xlabel="ECI X", ylabel="ECI Y", zlabel="ECI Z",
+                        title="Attitude · schematic body and panel normals\nFixed ECI view; not to scale")
+        attitude_ax.set_box_aspect((1, 1, 1))
+        attitude_ax.legend(loc="upper left", fontsize=8)
 
-    power_ax.plot(time[selected], data[selected, 6], color="goldenrod", label="Solar bus power (recorded)", linewidth=0.8)
-    power_ax.plot(time[selected], data[selected, 7], color="C2", label="Net battery power (recorded)", linewidth=0.8)
-    cursor = power_ax.axvline(time[frames[0]], color="red", linewidth=1)
-    power_ax.axhline(0, color="gray", linewidth=0.5)
-    power_ax.set(xlabel="Simulation time (s)", ylabel="Power (W)", title="Recorded power · charging (+), discharging (−)")
-    power_ax.grid(alpha=0.3)
-    power_ax.legend(fontsize=8, loc="upper right")
-    bars = panels_ax.bar(range(len(normals)), np.zeros(len(normals)), color="goldenrod")
-    normal_labels = [", ".join(f"{x:g}" for x in n) for n in normals]
-    panels_ax.set_xticks(range(len(normals)), [f"P{i + 1}\n({n})" for i, n in enumerate(normal_labels)], fontsize=8)
-    panel_max = max((g[3].max(initial=0) for g in geometry), default=0)
-    panels_ax.set(ylim=(0, max(0.1, panel_max * 1.3)), ylabel="Estimated bus power (W)",
-                  xlabel="Panel / outward body normal", title="Panel geometry at this timestamp")
-    panels_ax.grid(axis="y", alpha=0.3)
-    if not len(normals):
-        panels_ax.text(0.5, 0.5, "No configured solar panels", transform=panels_ax.transAxes, ha="center")
-    status = panels_ax.text(0.02, 0.97, "", transform=panels_ax.transAxes, va="top", fontsize=9)
+        power_ax.plot(time[selected], data[selected, 6], color="goldenrod", label="Solar bus power (recorded)", linewidth=0.8)
+        power_ax.plot(time[selected], data[selected, 7], color="C2", label="Net battery power (recorded)", linewidth=0.8)
+        cursor = power_ax.axvline(time[frames[0]], color="red", linewidth=1)
+        power_ax.axhline(0, color="gray", linewidth=0.5)
+        power_ax.set(xlabel="Simulation time (s)", ylabel="Power (W)", title="Recorded power · charging (+), discharging (−)")
+        power_ax.grid(alpha=0.3)
+        power_ax.legend(fontsize=8, loc="upper right")
+        bars = panels_ax.bar(range(len(normals)), np.zeros(len(normals)), color="goldenrod")
+        normal_labels = [", ".join(f"{x:g}" for x in n) for n in normals]
+        panels_ax.set_xticks(range(len(normals)), [f"P{i + 1}\n({n})" for i, n in enumerate(normal_labels)], fontsize=8)
+        panel_max = max((g[3].max(initial=0) for g in geometry), default=0)
+        panels_ax.set(ylim=(0, max(0.1, panel_max * 1.3)), ylabel="Estimated bus power (W)",
+                      xlabel="Panel / outward body normal", title="Panel geometry at this timestamp")
+        panels_ax.grid(axis="y", alpha=0.3)
+        if not len(normals):
+            panels_ax.text(0.5, 0.5, "No configured solar panels", transform=panels_ax.transAxes, ha="center")
+        status = panels_ax.text(0.02, 0.97, "", transform=panels_ax.transAxes, va="top", fontsize=9)
     title = fig.suptitle("")
 
     def update(index):
         row = frames[index]
-        sun_direction, axes, panel_normals, panel_power = geometry[index]
+        if full_dashboard:
+            sun_direction, axes, panel_normals, panel_power = geometry[index]
+        else:
+            sun_direction = sun_directions[index]
         p = position[row]
         satellite.set_data_3d(*p[:, None])
         sun_ray.set_data_3d(*np.array([p, p + sun_direction * extent * 0.5]).T)
-        for line, axis in zip(orbit_axes, axes):
-            line.set_data_3d(*np.array([p, p + axis * extent * 0.12]).T)
-        body.set_verts([body_to_world(vertices[face], data[row, 3:6]) for face in faces])
-        for line, label, axis in zip(body_axes, labels, axes):
-            line.set_data_3d(*np.array([np.zeros(3), axis]).T)
-            label.set_position_3d(axis * 1.1)
-        local_sun.set_data_3d(*np.array([np.zeros(3), sun_direction * 1.6]).T)
-        for line, label, normal, watts in zip(panel_lines, panel_labels, panel_normals, panel_power):
-            line.set_data_3d(*np.array([normal * 0.55, normal * 1.3]).T)
-            line.set_color("goldenrod" if watts > 0 else "gray")
-            label.set_position_3d(normal * 1.4)
-        for bar, watts in zip(bars, panel_power):
-            bar.set_height(watts)
-        cursor.set_xdata([time[row], time[row]])
-        illumination = data[row, 8]
-        shadow = "Umbra" if illumination == 0 else "Sunlit" if illumination == 1 else "Penumbra"
-        status.set_text(f"{shadow} · visible Sun {100 * illumination:.1f}%\n"
-                        f"Solar: {data[row, 6]:.3f} W recorded / {panel_power.sum():.3f} W geometry")
+        if full_dashboard:
+            for line, axis in zip(orbit_axes, axes):
+                line.set_data_3d(*np.array([p, p + axis * extent * 0.12]).T)
+            body.set_verts([body_to_world(vertices[face], data[row, 3:6]) for face in faces])
+            for line, label, axis in zip(body_axes, labels, axes):
+                line.set_data_3d(*np.array([np.zeros(3), axis]).T)
+                label.set_position_3d(axis * 1.1)
+            local_sun.set_data_3d(*np.array([np.zeros(3), sun_direction * 1.6]).T)
+            for line, label, normal, watts in zip(panel_lines, panel_labels, panel_normals, panel_power):
+                line.set_data_3d(*np.array([normal * 0.55, normal * 1.3]).T)
+                line.set_color("goldenrod" if watts > 0 else "gray")
+                label.set_position_3d(normal * 1.4)
+            for bar, watts in zip(bars, panel_power):
+                bar.set_height(watts)
+            cursor.set_xdata([time[row], time[row]])
+            illumination = data[row, 8]
+            shadow = "Umbra" if illumination == 0 else "Sunlit" if illumination == 1 else "Penumbra"
+            status.set_text(f"{shadow} · visible Sun {100 * illumination:.1f}%\n"
+                            f"Solar: {data[row, 6]:.3f} W recorded / {panel_power.sum():.3f} W geometry")
         stamp = epoch + timedelta(seconds=float(time[row]))
         title.set_text(f"t = {time[row]:.3f} s · {stamp.isoformat()}\n"
                        f"Recorded row {row + 1} · sampled playback ({len(frames)} frames)")

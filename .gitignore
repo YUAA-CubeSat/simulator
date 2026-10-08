@@ -9,3 +9,4 @@ telemetry*.csv
 plots/
 adcs_example
 .DS_Store
+orbit_solar.csv
