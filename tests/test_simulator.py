@@ -111,9 +111,9 @@ class SimulatorTests(unittest.TestCase):
 
     def test_independent_callback_rates(self):
         config = copy.deepcopy(self.config)
-        config["simulation"].update(duration_s=2.0, output_csv=None)
+        config["simulation"].update(duration_s=2.0, output_csv=None, accelerometer_period_s=0.6)
         config["sensors"]["magnetometers"].append(copy.deepcopy(config["sensors"]["magnetometers"][0]))
-        calls = {"mag": 0, "sun": 0, "battery": 0, "step": 0}
+        calls = {"mag": 0, "accel": 0, "sun": 0, "battery": 0, "step": 0}
         test = self
 
         class FakeController:
@@ -123,6 +123,11 @@ class SimulatorTests(unittest.TestCase):
             def magnetometers(self, time_s, *readings):
                 test.assertEqual(len(readings), 3)
                 calls["mag"] += 1
+
+            def accelerometers(self, time_s, *readings):
+                test.assertEqual(len(readings), 2)
+                test.assertAlmostEqual(time_s, calls["accel"] * 0.6)
+                calls["accel"] += 1
 
             def sun(self, *_):
                 calls["sun"] += 1
@@ -144,7 +149,7 @@ class SimulatorTests(unittest.TestCase):
 
         with patch("cubesat_sim.__main__.SitlController", FakeController):
             run(config)
-        self.assertEqual(calls, {"mag": 5, "sun": 2, "battery": 2, "step": 2})
+        self.assertEqual(calls, {"mag": 5, "accel": 4, "sun": 2, "battery": 2, "step": 2})
 
     def test_sun_sensor_uses_spacecraft_location_and_eclipse(self):
         config = copy.deepcopy(self.config)
@@ -168,7 +173,7 @@ class SimulatorTests(unittest.TestCase):
 
             def board():
                 data = bytearray()
-                while len(lines) < 5:
+                while len(lines) < 7:
                     data.extend(os.read(master, 1024))
                     while b"\n" in data:
                         line, _, rest = data.partition(b"\n")
@@ -181,14 +186,17 @@ class SimulatorTests(unittest.TestCase):
             controller = HitlController({"port": os.ttyname(slave), "baudrate": 115200, "timeout_s": 1},
                                         on_receive=received.append)
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
+            controller.accelerometers(1.0, [0.001, -0.0005, 0.00025], [-0.0004, 0.0009, -0.0001])
             controller.sun(1.0, [1, 0, 0])
             controller.battery(1.0, 0.8, -0.75)
             dipole, boom = controller.step(7, 1.0, 1.0)
             self.assertEqual(lines[0], "M 1000 0 10000 0 -10000")
             self.assertEqual(lines[1], "M 1000 1 0 20000 0")
-            self.assertEqual(lines[2], "S 1000 1 32767 0 0")
-            self.assertEqual(lines[3], "B 1000 800 -750")
-            self.assertEqual(lines[4], "T 7 1000 1000")
+            self.assertEqual(lines[2], "C 1000 0 1000 -500 250")
+            self.assertEqual(lines[3], "C 1000 1 -400 900 -100")
+            self.assertEqual(lines[4], "S 1000 1 32767 0 0")
+            self.assertEqual(lines[5], "B 1000 800 -750")
+            self.assertEqual(lines[6], "T 7 1000 1000")
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)

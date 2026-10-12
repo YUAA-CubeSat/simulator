@@ -5,6 +5,7 @@ simulation:
   duration_s: 21600.0         # six hours
   step_s: 0.2                 # Basilisk dynamics step
   magnetometer_period_s: 0.4 # independent ADCS callback period
+  accelerometer_period_s: 0.4 # independent ADCS callback period
   sun_period_s: 1.0
   control_period_s: 1.0
   field_period_s: 0.4         # WMM update period
@@ -64,6 +65,14 @@ sensors:
     - body_to_sensor: [[0, 1, 0], [-1, 0, 0], [0, 0, 1]]
       bias_T: [0.0, 0.0, 0.0]
       noise_std_T: 1.0e-7
+  accelerometers:
+    # Specific force at the body reference point, in each sensor's frame.
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      bias_m_s2: [0.0, 0.0, 0.0]
+      noise_std_m_s2: 1.0e-3
+    - body_to_sensor: [[0, 1, 0], [-1, 0, 0], [0, 0, 1]]
+      bias_m_s2: [0.0, 0.0, 0.0]
+      noise_std_m_s2: 1.0e-3
   sun_sensor:
     boresight_body: [1.0, 0.0, 0.0]
     half_angle_deg: 80.0

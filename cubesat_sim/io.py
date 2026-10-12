@@ -37,6 +37,12 @@ class _LineController:
             values = [round(float(x) * 1e9) for x in reading]
             self._send(f"M {time_ms} {sensor_id} " + " ".join(map(str, values)))
 
+    def accelerometers(self, time_s, *readings):
+        time_ms = round(time_s * 1000)
+        for sensor_id, reading in enumerate(readings):
+            values = [round(float(x) * 1e6) for x in reading]
+            self._send(f"C {time_ms} {sensor_id} " + " ".join(map(str, values)))
+
     def sun(self, time_s, vector):
         values = [round(float(x) * 32767) for x in vector] if vector is not None else [0, 0, 0]
         self._send("S " + str(round(time_s * 1000)) + " " + str(int(vector is not None)) + " " + " ".join(map(str, values)))

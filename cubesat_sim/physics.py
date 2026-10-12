@@ -75,6 +75,10 @@ class Plant:
     def magnetic_field_n(self):
         return np.asarray(self.wmm.envOutMsgs[0].read().magField_N)
 
+    def specific_force_body(self):
+        """Non-gravitational acceleration at Basilisk's body reference point, m/s²."""
+        return np.asarray(self.sc.scStateOutMsg.read().nonConservativeAccelpntB_B)
+
     def state(self):
         p = self.sc.scStateOutMsg.read()
         return {"position_m": np.asarray(p.r_BN_N), "velocity_m_s": np.asarray(p.v_BN_N),
@@ -114,6 +118,18 @@ class Sensors:
     def __init__(self, config):
         self.config = config
         self.rng = np.random.default_rng(config["simulation"]["seed"])
+        # Keep existing magnetometer/Sun noise sequences independent of this cadence.
+        self.accel_rng = np.random.default_rng(np.random.SeedSequence(
+            config["simulation"]["seed"], spawn_key=(1,)))
+
+    def accelerometers(self, plant):
+        force_body = plant.specific_force_body()
+        readings = []
+        for accel in self.config["sensors"]["accelerometers"]:
+            reading = np.asarray(accel["body_to_sensor"]) @ force_body + np.asarray(accel["bias_m_s2"])
+            reading += self.accel_rng.normal(0, accel["noise_std_m_s2"], 3)
+            readings.append(reading.tolist())
+        return readings
 
     def magnetometers(self, plant):
         state, c = plant.state(), self.config

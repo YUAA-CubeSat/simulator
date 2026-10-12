@@ -24,6 +24,8 @@ class SitlTests(unittest.TestCase):
 import sys, time
 assert input() == 'M 1000 0 10000 0 -10000'
 assert input() == 'M 1000 1 0 20000 0'
+assert input() == 'C 1000 0 1000 -500 250'
+assert input() == 'C 1000 1 -400 900 -100'
 assert input() == 'S 1000 1 32767 0 0'
 assert input() == 'S 1000 0 0 0 0'
 assert input() == 'B 1000 800 -1250'
@@ -38,6 +40,7 @@ assert input() == 'T 8 2000 1000'
 print('A 8 0 0 0 0', flush=True)
 ''')
         controller.magnetometers(1, [1e-5, 0, -1e-5], [0, 2e-5, 0])
+        controller.accelerometers(1, [0.001, -0.0005, 0.00025], [-0.0004, 0.0009, -0.0001])
         controller.sun(1, [1, 0, 0])
         controller.sun(1, None)
         controller.battery(1, 0.8, -1.25)
@@ -110,6 +113,7 @@ print('A 0 0 0 0 0', flush=True)
             controller = SitlController(config['sitl'])
             try:
                 controller.magnetometers(0, [0, 0, 0], [0, 0, 0])
+                controller.accelerometers(0, [0.001, -0.0005, 0], [0, 0.002, 0])
                 controller.sun(0, None)
                 controller.battery(0, 0.8, 0)
                 np.testing.assert_array_equal(controller.step(0, 0, 1)[0], [0, 0, 0])

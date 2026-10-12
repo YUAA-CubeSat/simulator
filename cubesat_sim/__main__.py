@@ -57,7 +57,7 @@ def run(config):
         controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
             config["hitl"], on_receive=lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr)
         )
-        periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}
+        periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "accelerometer_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}
         steps = round(sim["duration_s"] / plant.dt)
         checkpoint_steps = sim.get("checkpoint_steps", 1000)
         applied = np.zeros(3)
@@ -69,6 +69,8 @@ def run(config):
             t = plant.time_s
             if tick % periods["magnetometer_period_s"] == 0:
                 controller.magnetometers(t, *sensors.magnetometers(plant))
+            if tick % periods["accelerometer_period_s"] == 0:
+                controller.accelerometers(t, *sensors.accelerometers(plant))
             if tick % periods["sun_period_s"] == 0:
                 controller.sun(t, sensors.sun(plant))
             if tick % periods["control_period_s"] == 0:

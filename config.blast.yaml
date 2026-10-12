@@ -5,6 +5,7 @@ simulation:
   duration_s: 345600.0         # 96 hours
   step_s: 0.01 # 0.01
   magnetometer_period_s: 0.01
+  accelerometer_period_s: 0.01
   control_period_s: 0.01
   sun_period_s: 1.0
   field_period_s: 0.4         # WMM update period
@@ -14,8 +15,13 @@ simulation:
   checkpoint_steps: 1000      # sync CSV every N dynamics steps; 0 disables
 
 orbit:
-  position_m: [6878137.0, 0.0, 0.0]
-  velocity_m_s: [0.0, 7612.6, 0.0]
+  # Representative ISS deployment orbit: circular, 400 km altitude, 51.6 deg inclination.
+  # ISS reference: https://www.nasa.gov/reference/international-space-station/
+  # ECI J2000 approximation: RAAN = 0 deg, starting at the ascending node.
+  # Speed = sqrt(earth_mu_m3_s2 / (earth_radius_m + 400000)); period ~92.56 min.
+  # Nominal orbit, not the ISS ephemeris at start_utc; deployment impulse omitted.
+  position_m: [6778137.0, 0.0, 0.0]
+  velocity_m_s: [0.0, 4763.307889, 6009.798869]
   attitude_mrp: [0.1, -0.05, 0.02]
   angular_rate_rad_s: [0.09, -0.09, 0.09]
 
@@ -54,13 +60,22 @@ environment:
   wmm_coefficients: ./data/WMM2025.COF
 
 sensors:
+  # Both sensor pairs are body-aligned to match firmware identity calibration.
   magnetometers:
     - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
       bias_T: [0.0, 0.0, 0.0]
       noise_std_T: 1.0e-7
-    - body_to_sensor: [[0, 1, 0], [-1, 0, 0], [0, 0, 1]]
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
       bias_T: [0.0, 0.0, 0.0]
       noise_std_T: 1.0e-7
+  accelerometers:
+    # Specific force at the body reference point, in each sensor's frame.
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      bias_m_s2: [0.0, 0.0, 0.0]
+      noise_std_m_s2: 1.0e-3
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      bias_m_s2: [0.0, 0.0, 0.0]
+      noise_std_m_s2: 1.0e-3
   sun_sensor:
     boresight_body: [1.0, 0.0, 0.0]
     half_angle_deg: 80.0

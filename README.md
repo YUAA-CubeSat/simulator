@@ -115,7 +115,7 @@ Existing shared-library configurations must replace `sitl.library` and the symbo
 
 SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. HITL also prints received USB/UART data above the bar as `USB RX: b'A ...\n'`. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
-`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the three ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
+`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `sun_period_s`, and `control_period_s` independently schedule the four ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
 ## SITL/HITL line protocol
 
@@ -123,9 +123,18 @@ Both modes use ASCII lines with space separated decimal integers and `\n` termin
 
 Each magnetometer sends its raw simulated reading in its configured sensor frame, including bias and noise, without calibration or sensor fusion. Readings are quantized to integer nT, not hardware ADC counts. One `M` line is sent per sensor at each magnetometer update, with the same timestamp and a zero-based `sensor_id` matching its position in `sensors.magnetometers`. Any nonempty number of magnetometers is supported. The Sun vector is a unit vector in the body frame when valid, otherwise zero. Both transports use the integer units below, so SITL now has the same quantization as HITL.
 
+Two accelerometers are configured in the supplied SITL/HITL YAML files. Each sends one `C` line per `accelerometer_period_s` update, including time zero. IDs are zero-based indices into `sensors.accelerometers`, independent of magnetometer IDs; all accelerometers in an update share a timestamp. Any nonempty accelerometer list is supported. Each reading is `body_to_sensor × specific_force_body + bias_m_s2 + noise`, with independent zero-mean Gaussian noise per axis and sensor, specified by `noise_std_m_s2`. Values are rounded to the nearest integer µm/s² (ties to even), with identical encoding on both transports. These are raw sensor-frame values without calibration or fusion, not ADC counts or units of g.
+
+**Before each SITL/HITL run, verify that every magnetometer and accelerometer's `body_to_sensor` rotation matches the firmware calibration for that sensor ID.** The firmware's sensor-to-body rotation must be the inverse (transpose) of the configured `body_to_sensor` matrix before readings are combined or used for body-frame control. Identity firmware calibration requires body-aligned sensors (`body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]`), as configured for both sensor pairs in `config.blast.yaml`. The other example configurations may use rotated sensors; check their calibration explicitly.
+
+Accelerometers measure non-gravitational specific force at Basilisk's body reference point, using `nonConservativeAccelpntB_B`. Both sensors are co-located there; sensor offsets and rotational lever-arm acceleration are not modeled. With the current central-gravity and torque-only dynamics, ideal readings are zero in free fall, with configured bias and noise added. Orbital gravitational acceleration is not an accelerometer reading.
+
+Existing configurations must add `simulation.accelerometer_period_s` (a positive integer multiple of `step_s`) and `sensors.accelerometers`, as in `config.example.yaml`. Controllers must parse or explicitly ignore `C` messages before running this version. Rebuild the C example using the Quick start command; it decodes `C` into `adcs_accelerometer(time_s, sensor_id, accel_m_s2)` while retaining its B-dot control law. `A` remains the actuator response message. Include both accelerometer lines when budgeting UART bandwidth.
+
 | Direction | Line | Units |
 | --- | --- | --- |
 | Simulator → Controller | `M time_ms sensor_id x y z` | magnetic readings, nT |
+| Simulator → Controller | `C time_ms sensor_id x y z` | specific force, µm/s² (integer = m/s² × 1,000,000) |
 | Simulator → Controller | `S time_ms valid sx sy sz` | Sun body vector, signed Q15 (`32767` = 1) |
 | Simulator → Controller | `B time_ms soc_permille power_mW` | battery state of charge, 0–1000; signed net battery power, mW |
 | Simulator → Controller | `T tick time_ms period_ms` | run one "tick" of the firmware |
@@ -136,13 +145,15 @@ Example exchange:
 ```text
 M 1000 0 10000 0 -10000
 M 1000 1 0 20000 0
+C 1000 0 1000 -500 250
+C 1000 1 -400 900 -100
 S 1000 1 32767 0 0
 B 1000 800 -750
 T 5 1000 1000
 A 5 100000 0 -100000 500
 ```
 
-The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M`, `S`, or `B`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. This replaces the previous two-sensor `M` format; controller firmware must update its parser. The example controller receives every sensor but uses only sensor 0 for B-dot control. At 115200 baud, the two sample `M` lines together take about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
+The `A` tick must match the preceding `T` tick. The controller sends one `A` line after each `T`; no response is needed for `M`, `C`, `S`, or `B`. `S` has zero vector components when `valid=0`. Missing, stale, or malformed actuator lines stop the simulation. `sitl.timeout_s` or `hitl.timeout_s` is the response deadline for the selected mode. Dipoles are clipped to the configured per-axis limits; boom targets are clipped to travel limits and rate limited. This replaces the previous two-sensor `M` format; controller firmware must update its parser. The example controller receives every sensor but uses only sensor 0 for B-dot control. At 115200 baud, the two sample `M` lines together take about 4 ms on the wire, so sensor periods can be set independently of a faster dynamics step.
 
 `B time_ms soc_permille power_mW` is sent immediately before every `T`, using the
 same simulation timestamp, in both SITL and HITL. `soc_permille` is the current
@@ -172,7 +183,7 @@ soc, power_W)` without changing its B-dot control law.
 - The boom is a massless rod with a point tip mass. Extension changes Basilisk's spacecraft inertia and the gravity gradient torque. The inertia rate adds a reaction torque. `tip_mass_kg`, `axis_body`, initial and allowed lengths, and maximum extension speed are in the config. Flexible boom dynamics are not modeled.
 - The initial orbit state uses Earth centered inertial coordinates with J2000 mean equator/equinox axes. The template's orbit is near circular LEO. Central Earth gravity is used for propagation.
 
-`simulation.seed` makes sensor noise repeatable. CSV telemetry includes position, angular rate, applied dipoles, boom length, the three diagonal moments of inertia, the WMM field, and battery/power values described below. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
+`simulation.seed` makes sensor noise repeatable. Accelerometers use a separate random stream, so their update rate does not change magnetometer or Sun noise sequences. CSV telemetry includes position, angular rate, applied dipoles, boom length, the three diagonal moments of inertia, the WMM field, and battery/power values described below. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
 
 ## Battery and solar power
 
@@ -332,6 +343,7 @@ Run these utilities from the repository root after a simulation:
 .venv/bin/python -m utilities.plot_ggb telemetry.csv
 .venv/bin/python -m utilities.plot_battery telemetry.csv
 .venv/bin/python -m utilities.plot_angular_velocity telemetry.csv
+.venv/bin/python -m utilities.plot_y_thomson telemetry.csv
 .venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml
 ```
 
@@ -348,6 +360,44 @@ For example:
 
 ```sh
 .venv/bin/python -m utilities.plot_angular_velocity telemetry.csv --frame world
+```
+
+For **Y-Thomson nadir pointing**, use `plot_y_thomson`, which saves
+`plots/y_thomson_pointing.png`. This evaluates the recorded true attitude, not
+the firmware's estimated attitude or deployment decision. Its right-handed
+target frame is **+X along-track, +Y opposite orbital angular momentum, +Z
+toward Earth**. This assumes the configured +Z boom is intended to point nadir;
+verify this axis/sign convention against your ADCS target. The orbit normal is
+`h = r × v`; along-track is the velocity direction with its radial component
+removed. The pitch/orbit-normal, yaw/local-vertical, roll/along-track convention
+and one-revolution-per-orbit motion are described by
+[Lewis and Zajac (1964)](https://content-animation.org.uk/htmls/lewis.htm).
+
+Four panels show directed X/Y/Z alignment errors (degrees), the full attitude
+rotation error (0–180 degrees), orbit-relative body angular rates and their
+magnitude (degrees/second), and boom extension (meters). Successful pointing
+keeps both attitude errors and orbit-relative rates near zero over multiple
+orbits. A 180-degree flip remains a large error, and nadir alignment alone
+does not hide an incorrect Y-axis direction. No mission-specific pass/fail
+tolerance is assumed.
+
+The rate residual is `omega_BN_B - C_BN * (r × v / |r|²)`, using the simulator's
+fixed orbit plane. Thus successful pointing has nonzero inertial angular rate:
+approximately `[0, -n, 0]` in the target body frame, with `n` the orbital rate
+(about 0.065 degrees/second for the nominal ISS orbit). A low inertial spin
+magnitude alone does not establish Y-Thomson pointing.
+
+Existing CSVs are supported: velocity is estimated from recorded positions with
+second-order finite differences on the actual time grid, before applying the
+display window. At least three samples, position, attitude MRPs, body rates,
+and boom length are required. Use densely sampled telemetry (e.g. 1 second);
+sparse samples can alias tumbling and degrade the orbital-rate estimate,
+especially at the endpoints. The utility does not model orbit-plane precession.
+Time is displayed in hours for long runs; select acquisition or steady-state
+windows in seconds, for example:
+
+```sh
+.venv/bin/python -m utilities.plot_y_thomson telemetry.csv --start-s 0 --end-s 600 -o plots/y_thomson_acquisition.png
 ```
 
 The battery utility saves `plots/battery.png`, with three panels sharing a time axis:
