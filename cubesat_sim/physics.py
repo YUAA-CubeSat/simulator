@@ -118,9 +118,19 @@ class Sensors:
     def __init__(self, config):
         self.config = config
         self.rng = np.random.default_rng(config["simulation"]["seed"])
-        # Keep existing magnetometer/Sun noise sequences independent of this cadence.
+        # Separate streams keep sensor noise independent of the added sensor cadences.
         self.accel_rng = np.random.default_rng(np.random.SeedSequence(
             config["simulation"]["seed"], spawn_key=(1,)))
+        self.gyro_rng = np.random.default_rng(np.random.SeedSequence(
+            config["simulation"]["seed"], spawn_key=(2,)))
+
+    def gyroscope(self, plant):
+        """Angular velocity relative to inertial space, in the sensor frame, rad/s."""
+        gyro = self.config["sensors"]["gyroscope"]
+        rate_body = plant.state()["angular_rate_rad_s"]
+        reading = np.asarray(gyro["body_to_sensor"]) @ rate_body + np.asarray(gyro["bias_rad_s"])
+        reading += self.gyro_rng.normal(0, gyro["noise_std_rad_s"], 3)
+        return reading.tolist()
 
     def accelerometers(self, plant):
         force_body = plant.specific_force_body()

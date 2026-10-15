@@ -111,9 +111,9 @@ class SimulatorTests(unittest.TestCase):
 
     def test_independent_callback_rates(self):
         config = copy.deepcopy(self.config)
-        config["simulation"].update(duration_s=2.0, output_csv=None, accelerometer_period_s=0.6)
+        config["simulation"].update(duration_s=2.0, output_csv=None, accelerometer_period_s=0.6, gyroscope_period_s=0.8)
         config["sensors"]["magnetometers"].append(copy.deepcopy(config["sensors"]["magnetometers"][0]))
-        calls = {"mag": 0, "accel": 0, "sun": 0, "battery": 0, "step": 0}
+        calls = {"mag": 0, "accel": 0, "gyro": 0, "sun": 0, "battery": 0, "step": 0}
         test = self
 
         class FakeController:
@@ -128,6 +128,11 @@ class SimulatorTests(unittest.TestCase):
                 test.assertEqual(len(readings), 2)
                 test.assertAlmostEqual(time_s, calls["accel"] * 0.6)
                 calls["accel"] += 1
+
+            def gyroscope(self, time_s, reading):
+                test.assertEqual(len(reading), 3)
+                test.assertAlmostEqual(time_s, calls["gyro"] * 0.8)
+                calls["gyro"] += 1
 
             def sun(self, *_):
                 calls["sun"] += 1
@@ -149,7 +154,7 @@ class SimulatorTests(unittest.TestCase):
 
         with patch("cubesat_sim.__main__.SitlController", FakeController):
             run(config)
-        self.assertEqual(calls, {"mag": 5, "accel": 4, "sun": 2, "battery": 2, "step": 2})
+        self.assertEqual(calls, {"mag": 5, "accel": 4, "gyro": 3, "sun": 2, "battery": 2, "step": 2})
 
     def test_sun_sensor_uses_spacecraft_location_and_eclipse(self):
         config = copy.deepcopy(self.config)
@@ -173,7 +178,7 @@ class SimulatorTests(unittest.TestCase):
 
             def board():
                 data = bytearray()
-                while len(lines) < 7:
+                while len(lines) < 8:
                     data.extend(os.read(master, 1024))
                     while b"\n" in data:
                         line, _, rest = data.partition(b"\n")
@@ -187,6 +192,7 @@ class SimulatorTests(unittest.TestCase):
                                         on_receive=received.append)
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
             controller.accelerometers(1.0, [0.001, -0.0005, 0.00025], [-0.0004, 0.0009, -0.0001])
+            controller.gyroscope(1.0, [0.01, -0.02, 0.015])
             controller.sun(1.0, [1, 0, 0])
             controller.battery(1.0, 0.8, -0.75)
             dipole, boom = controller.step(7, 1.0, 1.0)
@@ -194,9 +200,10 @@ class SimulatorTests(unittest.TestCase):
             self.assertEqual(lines[1], "M 1000 1 0 20000 0")
             self.assertEqual(lines[2], "C 1000 0 1000 -500 250")
             self.assertEqual(lines[3], "C 1000 1 -400 900 -100")
-            self.assertEqual(lines[4], "S 1000 1 32767 0 0")
-            self.assertEqual(lines[5], "B 1000 800 -750")
-            self.assertEqual(lines[6], "T 7 1000 1000")
+            self.assertEqual(lines[4], "G 1000 10000 -20000 15000")
+            self.assertEqual(lines[5], "S 1000 1 32767 0 0")
+            self.assertEqual(lines[6], "B 1000 800 -750")
+            self.assertEqual(lines[7], "T 7 1000 1000")
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)

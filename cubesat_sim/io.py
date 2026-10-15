@@ -43,6 +43,11 @@ class _LineController:
             values = [round(float(x) * 1e6) for x in reading]
             self._send(f"C {time_ms} {sensor_id} " + " ".join(map(str, values)))
 
+    def gyroscope(self, time_s, reading):
+        """Send the single gyroscope reading in integer microradians per second."""
+        values = [round(float(x) * 1e6) for x in reading]
+        self._send(f"G {round(time_s * 1000)} " + " ".join(map(str, values)))
+
     def sun(self, time_s, vector):
         values = [round(float(x) * 32767) for x in vector] if vector is not None else [0, 0, 0]
         self._send("S " + str(round(time_s * 1000)) + " " + str(int(vector is not None)) + " " + " ".join(map(str, values)))

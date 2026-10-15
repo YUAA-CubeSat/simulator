@@ -29,7 +29,7 @@ def load_config(path):
         from .orbit_solar import validate_config
         return validate_config(c, path)
     s, o, sc, env, sensors = (c[k] for k in ("simulation", "orbit", "spacecraft", "environment", "sensors"))
-    for key in ("duration_s", "step_s", "magnetometer_period_s", "accelerometer_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):
+    for key in ("duration_s", "step_s", "magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):
         s[key] = float(s[key])
     start = datetime.fromisoformat(s["start_utc"].replace("Z", "+00:00"))
     if start.tzinfo is None:
@@ -55,12 +55,12 @@ def load_config(path):
         raise ValueError("simulation.mode or clock is invalid")
     if s["mode"] == "hitl" and s["clock"] != "realtime":
         raise ValueError("HITL requires a realtime clock")
-    for key in ("duration_s", "step_s", "magnetometer_period_s", "accelerometer_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):
+    for key in ("duration_s", "step_s", "magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):
         if not math.isfinite(float(s[key])) or float(s[key]) <= 0:
             raise ValueError(f"simulation.{key} must be positive")
     if s["step_s"] > s["duration_s"]:
         raise ValueError("step_s cannot exceed duration_s")
-    for key in ("magnetometer_period_s", "accelerometer_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s", "duration_s"):
+    for key in ("magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s", "duration_s"):
         ratio = s[key] / s["step_s"]
         if ratio < 1 or abs(ratio - round(ratio)) > 1e-8:
             raise ValueError(f"simulation.{key} must be a positive integer multiple of step_s")
@@ -148,6 +148,19 @@ def load_config(path):
         accel["bias_m_s2"] = _vector(accel["bias_m_s2"], f"accelerometer {i} bias_m_s2").tolist()
         if not math.isfinite(accel["noise_std_m_s2"]) or accel["noise_std_m_s2"] < 0:
             raise ValueError("accelerometer noise must be nonnegative and finite")
+    gyro = sensors["gyroscope"]
+    if not isinstance(gyro, dict):
+        raise ValueError("sensors.gyroscope must be a single sensor mapping")
+    gyro["noise_std_rad_s"] = float(gyro["noise_std_rad_s"])
+    dcm = np.asarray(gyro["body_to_sensor"], dtype=float)
+    if (dcm.shape != (3, 3) or not np.all(np.isfinite(dcm))
+            or not np.allclose(dcm @ dcm.T, np.eye(3), atol=1e-5)
+            or np.linalg.det(dcm) < 0.999):
+        raise ValueError("gyroscope body_to_sensor must be a proper rotation")
+    gyro["body_to_sensor"] = dcm.tolist()
+    gyro["bias_rad_s"] = _vector(gyro["bias_rad_s"], "gyroscope bias_rad_s").tolist()
+    if not math.isfinite(gyro["noise_std_rad_s"]) or gyro["noise_std_rad_s"] < 0:
+        raise ValueError("gyroscope noise must be nonnegative and finite")
     sun = sensors["sun_sensor"]
     sun["boresight_body"] = _vector(sun["boresight_body"], "sun_sensor.boresight_body", True).tolist()
     if not 0 < sun["half_angle_deg"] <= 180 or not math.isfinite(sun["noise_std_rad"]) or sun["noise_std_rad"] < 0:

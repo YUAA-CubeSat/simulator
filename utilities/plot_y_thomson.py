@@ -63,31 +63,53 @@ def main():
         mask &= time <= args.end_s
     if not mask.any():
         raise ValueError("No telemetry samples in the requested time window")
-    hours = time[mask] / 3600
+    # Keep the overview, but resolve the residual motion over one final orbit.
+    period = 2 * np.pi / np.median(orbital[mask])
+    detail = mask & (time >= time[mask][-1] - period)
     plt = pyplot(args.show)
-    fig, axes = plt.subplots(4, 1, sharex=True, figsize=(12, 11), layout='constrained')
-    for i, label in enumerate(('X to along-track', 'Y to negative orbit normal', 'Z to nadir')):
-        axes[0].plot(hours, angles[mask, i], label=label, linewidth=0.8)
-    axes[0].set_ylabel('Axis error (deg)')
-    axes[0].set_ylim(0, 180)
-    axes[0].legend(loc='upper right')
-    axes[1].plot(hours, total[mask], color='C3', linewidth=0.8)
-    axes[1].set_ylabel('Full attitude error (deg)')
-    axes[1].set_ylim(0, 180)
-    for i, label in enumerate(('X', 'Y', 'Z')):
-        axes[2].plot(hours, np.degrees(relative[mask, i]), label=label, linewidth=0.8)
-    axes[2].plot(hours, np.degrees(np.linalg.norm(relative[mask], axis=1)),
-                 color='black', label='Magnitude', linewidth=0.8)
-    axes[2].axhline(0, color='gray', linestyle='--', linewidth=0.7)
-    axes[2].set_ylabel('Orbit-relative rate (deg/s)')
-    axes[2].legend(loc='upper right', ncol=4)
-    axes[3].plot(hours, data[mask, 9], color='C4')
-    axes[3].set_ylabel('Boom extension (m)')
-    axes[3].set_xlabel('Simulation time (hours)')
-    for ax in axes:
-        ax.grid(alpha=0.3)
-    fig.suptitle('Y-Thomson pointing: +X along-track, +Y opposite orbit normal, +Z nadir\n'
-                 'Target: zero pointing error and zero orbit-relative rate')
+    fig, axes = plt.subplots(5, 2, figsize=(15, 13), layout='constrained',
+                             sharex='col')
+    for col, window in enumerate((mask, detail)):
+        hours = time[window] / 3600
+        z_error = angles[window, 2]
+        axes[0, col].plot(hours, z_error, color='C2', linewidth=0.8)
+        if col == 0:
+            axes[0, col].set_ylim(-3, 183)
+            axes[0, col].set_yticks([0, 90, 180],
+                                   ['0°: toward Earth', '90°: sideways', '180°: away'])
+        else:
+            # Tight limits expose small wobble without other axes obscuring Z.
+            lo, hi = z_error.min(), z_error.max()
+            pad = max(0.5, (hi - lo) * 0.15)
+            axes[0, col].set_ylim(max(-1, lo - pad), min(181, hi + pad))
+        axes[0, col].set_ylabel('+Z nadir error (deg)')
+        for i, label in enumerate(('+X to along-track', '+Y to negative orbit normal')):
+            axes[1, col].plot(hours, angles[window, i], label=label, linewidth=0.8)
+        axes[1, col].set_ylabel('Other axis errors (deg)')
+        axes[1, col].set_ylim(0, 180)
+        axes[1, col].legend(loc='upper right', fontsize=8)
+        axes[2, col].plot(hours, total[window], color='C3', linewidth=0.8)
+        axes[2, col].set_ylabel('Full attitude error (deg)')
+        axes[2, col].set_ylim(0, 180)
+        for i, label in enumerate(('X', 'Y', 'Z')):
+            axes[3, col].plot(hours, np.degrees(relative[window, i]), label=label, linewidth=0.8)
+        axes[3, col].plot(hours, np.degrees(np.linalg.norm(relative[window], axis=1)),
+                         color='black', label='Magnitude', linewidth=0.8)
+        axes[3, col].axhline(0, color='gray', linestyle='--', linewidth=0.7)
+        axes[3, col].set_ylabel('Orbit-relative rate (deg/s)')
+        axes[3, col].legend(loc='upper right', ncol=4, fontsize=8)
+        axes[4, col].plot(hours, data[window, 9], color='C4')
+        axes[4, col].set_ylabel('Boom extension (m)')
+        axes[4, col].set_xlabel('Simulation time (hours)')
+        for ax in axes[:, col]:
+            ax.grid(alpha=0.3)
+    axes[0, 0].set_title('Selected time window')
+    axes[0, 1].set_title('Final orbit within selected window — Z scale enlarged')
+    z_detail = angles[detail, 2]
+    rate_detail = np.degrees(np.linalg.norm(relative[detail], axis=1))
+    fig.suptitle('Y-Thomson pointing: success = all errors and orbit-relative rate near zero\n'
+                 f'Final-orbit +Z nadir error: {z_detail.min():.1f}–{z_detail.max():.1f}°; '
+                 f'median residual rotation: {np.median(rate_detail):.3f}°/s')
     save_plot(fig, plt, args)
     print(f"Displayed window: {time[mask][0]:g}–{time[mask][-1]:g} s; "
           f"median orbital rate {np.degrees(np.median(orbital[mask])):.5f} deg/s")

@@ -6,6 +6,7 @@ simulation:
   step_s: 0.2                 # Basilisk dynamics step
   magnetometer_period_s: 0.4 # independent ADCS callback period
   accelerometer_period_s: 0.4 # independent ADCS callback period
+  gyroscope_period_s: 0.4 # independent ADCS callback period
   sun_period_s: 1.0
   control_period_s: 1.0
   field_period_s: 0.4         # WMM update period
@@ -73,6 +74,11 @@ sensors:
     - body_to_sensor: [[0, 1, 0], [-1, 0, 0], [0, 0, 1]]
       bias_m_s2: [0.0, 0.0, 0.0]
       noise_std_m_s2: 1.0e-3
+  gyroscope:
+    # One three-axis angular-rate sensor; illustrative noise per sample per axis.
+    body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    bias_rad_s: [0.0, 0.0, 0.0]
+    noise_std_rad_s: 1.0e-4
   sun_sensor:
     boresight_body: [1.0, 0.0, 0.0]
     half_angle_deg: 80.0

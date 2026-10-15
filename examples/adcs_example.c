@@ -37,6 +37,13 @@ void adcs_accelerometer(double time_s, int sensor_id, const double accel_m_s2[3]
     (void)accel_m_s2;
 }
 
+void adcs_gyroscope(double time_s, const double rate_rad_s[3])
+{
+    /* Hook for rate-aware control; reading is in the gyroscope's sensor frame. */
+    (void)time_s;
+    (void)rate_rad_s;
+}
+
 void adcs_sun(double time_s, const double vector_body[3], int valid)
 {
     (void)time_s;
@@ -85,6 +92,11 @@ int main(void)
             double accel[3];
             for (int i = 0; i < 3; ++i) accel[i] = values[i] * 1e-6;
             adcs_accelerometer(time_ms / 1000.0, sensor_id, accel);
+        } else if (line[0] == 'G' && sscanf(line, "G %lld %lld %lld %lld",
+                &time_ms, &values[0], &values[1], &values[2]) == 4) {
+            double rate[3];
+            for (int i = 0; i < 3; ++i) rate[i] = values[i] * 1e-6;
+            adcs_gyroscope(time_ms / 1000.0, rate);
         } else if (line[0] == 'S' && sscanf(line, "S %lld %d %lld %lld %lld",
                 &time_ms, &valid, &values[0], &values[1], &values[2]) == 5) {
             double vector[3];
