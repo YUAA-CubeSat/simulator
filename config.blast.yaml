@@ -2,7 +2,7 @@ simulation:
   mode: sitl                  # sitl or hitl
   clock: simulated            # simulated or realtime; hitl requires realtime
   start_utc: "2026-09-18T00:00:00Z"
-  duration_s: 172800.0         # 48 hours
+  duration_s: 21600 # 6 hours # 172800.0         # 48 hours
   step_s: 0.01 # 0.01
   magnetometer_period_s: 0.01
   accelerometer_period_s: 0.01

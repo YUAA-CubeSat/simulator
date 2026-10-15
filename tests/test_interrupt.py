@@ -42,6 +42,7 @@ class InterruptTests(unittest.TestCase):
                         if cleanup_error:
                             raise RuntimeError("controller cleanup failed")
                     with patch("cubesat_sim.__main__.SitlController") as controller, patch("sys.stderr", io.StringIO()):
+                        controller.return_value.estimate = None
                         controller.return_value.step.side_effect = step
                         controller.return_value.close.side_effect = close
                         with self.assertRaises(RuntimeError if cleanup_error else KeyboardInterrupt):
@@ -61,6 +62,7 @@ class InterruptTests(unittest.TestCase):
                 return original(plant, dipole, length)
             with patch("cubesat_sim.__main__.SitlController") as controller, \
                     patch.object(Plant, "step", interrupt_step), patch("sys.stderr", io.StringIO()):
+                controller.return_value.estimate = None
                 controller.return_value.step.return_value = (np.zeros(3), 0)
                 with self.assertRaises(KeyboardInterrupt):
                     run(config)
@@ -113,6 +115,7 @@ for line in sys.stdin:
         config = self.config("unused.csv")
         config["simulation"]["output_csv"] = None
         with patch("cubesat_sim.__main__.SitlController") as controller, patch("sys.stderr", io.StringIO()):
+            controller.return_value.estimate = None
             controller.return_value.step.side_effect = KeyboardInterrupt
             with self.assertRaises(KeyboardInterrupt):
                 run(config)

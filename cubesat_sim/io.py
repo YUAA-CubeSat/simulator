@@ -57,6 +57,7 @@ class _LineController:
         self._send(f"B {round(time_s * 1000)} {round(soc * 1000)} {round(power_W * 1000)}")
 
     def step(self, tick, time_s, dt_s):
+        self.estimate = None  # Legacy controllers have no estimate telemetry.
         self._send(f"T {tick} {round(time_s * 1000)} {round(dt_s * 1000)}")
         deadline = time.monotonic() + self.timeout
         while True:
@@ -64,8 +65,16 @@ class _LineController:
                 line, _, rest = self.buffer.partition(b"\n")
                 self.buffer = bytearray(rest)
                 fields = line.decode("ascii").split()
-                if len(fields) != 6 or fields[0] != "A" or int(fields[1]) != tick:
+                if len(fields) not in (6, 12) or fields[0] != "A" or int(fields[1]) != tick:
                     raise ValueError("invalid actuator line or tick mismatch")
+                if len(fields) == 12:
+                    if fields[6] != "E1":
+                        raise ValueError("unknown estimate telemetry version")
+                    epoch, valid, *rates = map(int, fields[7:])
+                    if not 0 <= epoch <= 0xffffffff or valid not in (0, 1) or any(
+                            not -(2**31) <= value < 2**31 for value in rates):
+                        raise ValueError("invalid estimate telemetry")
+                    self.estimate = (epoch / 1000, valid, *(value / 1e6 for value in rates))
                 return validate_command([int(x) / 1e6 for x in fields[2:5]], int(fields[5]) / 1000)
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not select.select([self.read_fd], [], [], remaining)[0]:

@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -27,6 +28,9 @@ class CheckpointTests(unittest.TestCase):
                 snapshots = []
 
                 def sync(fd):
+                    # The estimator sidecar is checkpointed separately.
+                    if os.fstat(fd).st_ino != output.stat().st_ino:
+                        return
                     # An independent reader sees flushed CSV while the run is active.
                     with output.open() as file:
                         rows = list(csv.DictReader(file))
@@ -41,6 +45,7 @@ class CheckpointTests(unittest.TestCase):
                 with patch('cubesat_sim.__main__.SitlController') as controller, \
                         patch('cubesat_sim.__main__.os.fsync', side_effect=sync), \
                         patch('sys.stderr', io.StringIO()):
+                    controller.return_value.estimate = None
                     controller.return_value.step.side_effect = step
                     with self.assertRaises(KeyboardInterrupt):
                         run(config)
@@ -57,9 +62,10 @@ class CheckpointTests(unittest.TestCase):
                 with patch('cubesat_sim.__main__.SitlController') as controller, \
                         patch('cubesat_sim.__main__.os.fsync') as sync, \
                         patch('sys.stderr', io.StringIO()):
+                    controller.return_value.estimate = None
                     controller.return_value.step.return_value = (np.zeros(3), 0)
                     run(config)
-                self.assertEqual(sync.call_count, 4 if enabled else 0)
+                self.assertEqual(sync.call_count, 8 if enabled else 0)
                 if enabled:
                     with output.open() as file:
                         times = [round(float(r['time_s']), 8) for r in csv.DictReader(file)]

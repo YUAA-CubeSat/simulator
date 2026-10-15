@@ -57,6 +57,13 @@ print('A 8 0 0 0 0', flush=True)
         controller.close()
         self.assertEqual(controller.process.returncode, 0)
 
+    def test_estimate_extension_and_legacy_reset(self):
+        controller = self.controller("input(); print('A 0 1 2 3 4 E1 125 1 10000 -20000 30000', flush=True); input(); print('A 1 0 0 0 0', flush=True)")
+        controller.step(0, 0.2, 0.01)
+        np.testing.assert_allclose(controller.estimate, [0.125, 1, 0.01, -0.02, 0.03])
+        controller.step(1, 0.21, 0.01)
+        self.assertIsNone(controller.estimate)
+
     def test_all_magnetometers_have_distinct_ids(self):
         controller = self.controller("""
 assert input() == 'M 125 0 1 -2 3'
@@ -72,7 +79,8 @@ print('A 0 0 0 0 0', flush=True)
         self.assertEqual(controller.process.returncode, 0)
 
     def test_invalid_replies(self):
-        for reply in ['A 8 0 0 0 0', 'debug message', 'A 7 nope 0 0 0', 'x' * 257]:
+        for reply in ['A 8 0 0 0 0', 'debug message', 'A 7 nope 0 0 0', 'A 7 0 0 0 0 E2 0 1 0 0 0',
+                      'A 7 0 0 0 0 E1 0 2 0 0 0', 'A 7 0 0 0 0 E1 0 1 nan 0 0', 'x' * 257]:
             with self.subTest(reply=reply):
                 controller = self.controller(f'input(); print({reply!r}, flush=True)')
                 with self.assertRaises(ValueError):

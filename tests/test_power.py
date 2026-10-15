@@ -255,6 +255,7 @@ class PowerTests(unittest.TestCase):
             path = Path(directory) / "telemetry.csv"
             self.config["simulation"].update(duration_s=2, output_csv=str(path))
             with patch("cubesat_sim.__main__.SitlController") as controller:
+                controller.return_value.estimate = None
                 controller.return_value.step.return_value = ([0.2, 0, 0], 0)
                 plant = run(self.config)
                 updates = controller.return_value.battery.call_args_list
@@ -289,6 +290,7 @@ class PowerTests(unittest.TestCase):
                                              control_period_s=0.01, output_csv=str(path))
             with patch("cubesat_sim.__main__.SitlController") as controller:
                 # 40% duty at 1.5 W; each one-second CSV sample lands in off time.
+                controller.return_value.estimate = None
                 controller.return_value.step.side_effect = lambda tick, *_: (
                     [0.2, 0.2, 0.2] if tick % 100 < 40 else [0, 0, 0], 0)
                 run(self.config)

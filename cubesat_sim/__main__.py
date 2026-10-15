@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from .config import load_config
 from .io import HitlController, SitlController
+from .estimator_log import EstimatorLog
 
 
 def telemetry_row(plant, applied):
@@ -36,6 +37,7 @@ def run(config):
     plant = Plant(config)
     sensors = Sensors(config)
     sim = config["simulation"]
+    estimator_log = None
     file = None
     progress = None
     controller = None
@@ -54,6 +56,8 @@ def run(config):
                              "battery_energy_Wh", "battery_soc", "solar_power_W", "magnetorquer_power_W", "battery_power_W", "sunlight_fraction", "unserved_power_W", "unserved_energy_Wh",
                              "solar_energy_Wh", "magnetorquer_energy_Wh", "charging_loss_Wh", "curtailed_energy_Wh",
                              "nominal_power_W", "nominal_energy_Wh"])
+        if output:
+            estimator_log = EstimatorLog(output)
         controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
             config["hitl"], on_receive=lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr)
         )
@@ -75,9 +79,13 @@ def run(config):
                 controller.gyroscope(t, sensors.gyroscope(plant))
             if tick % periods["sun_period_s"] == 0:
                 controller.sun(t, sensors.sun(plant))
+            estimate = None
             if tick % periods["control_period_s"] == 0:
                 controller.battery(t, plant.power.battery_soc, plant.power.battery_power_W)
                 applied, boom_target = controller.step(tick, t, sim["control_period_s"])
+                estimate = getattr(controller, "estimate", None)
+            if estimator_log:
+                estimator_log.record(plant, tick, estimate)
             step_in_progress = True
             applied = plant.step(applied, boom_target)
             last_completed_time = plant.time_s
@@ -88,6 +96,7 @@ def run(config):
                 writer.writerow(telemetry_row(plant, applied))
                 last_recorded_time = plant.time_s
             if file and checkpoint:
+                estimator_log.flush()
                 file.flush()
                 os.fsync(file.fileno())
             if sim["clock"] == "realtime":
@@ -118,11 +127,15 @@ def run(config):
                     tqdm.write(f"Telemetry saved to {output}", file=sys.stderr)
         finally:
             try:
-                if progress is not None:
-                    progress.close()
+                if estimator_log is not None:
+                    estimator_log.close()
             finally:
-                if controller is not None:
-                    controller.close()
+                try:
+                    if progress is not None:
+                        progress.close()
+                finally:
+                    if controller is not None:
+                        controller.close()
 
 
 def main():

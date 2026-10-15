@@ -538,3 +538,51 @@ The animation supports GIF and interactive HTML with playback controls:
 
 The utilities require NumPy, Matplotlib, and Pillow, plus PyYAML for animation;
 they can process existing telemetry without loading Basilisk.
+
+## Firmware estimator comparison
+
+With `simulation.output_csv: telemetry.csv`, SITL/HITL also writes
+`telemetry_estimator.csv` (the output stem plus `_estimator.csv`). It records
+pre-step ground truth at **every dynamics step**, independently of the main
+telemetry period: body-frame `omega_BN_B` in rad/s and attitude MRPs `sigma_BN`
+(inertial-to-body). Each control response is recorded at that same pre-step
+instant, with `estimate_present`, `estimate_valid`, its sensor epoch
+`estimate_time_s`, and `estimate_w{x,y,z}_rad_s`. No response on an intervening
+step, or a legacy controller, gives `estimate_present=0`. Invalid/missing values
+are zero placeholders, not measurements. Both CSVs are flushed at checkpoints
+and closed on exit, including Ctrl+C. Full-cadence logging increases disk usage.
+
+From the simulator directory:
+
+```sh
+.venv/bin/python -m utilities.plot_estimator telemetry_estimator.csv -o plots/estimator.png
+```
+
+Add `--show` to open the plot. It overlays body rates, plots estimate-minus-truth
+errors, reports per-axis RMSE, and shows truth attitude. Truth rates are linearly
+interpolated to the **sensor epoch**, not the response arrival time. Held epochs
+are scored only once; invalid estimates and epochs outside recorded truth are
+excluded. Use a dynamics step fine enough to resolve the motion. These are
+diagnostic errors, not a pass/fail accuracy specification.
+
+The YUAA firmware currently estimates rates only during pointing measurement
+windows, after detumbling and boom deployment. An early/short run can therefore
+contain no valid estimates. It has no attitude estimator; only attitude truth is
+recorded/plotted. Rates are the absolute fused inertial angular velocity expressed
+in body axes, not the high-pass libration residual.
+
+The optional versioned response extension is:
+
+```text
+A tick mx my mz boom E1 rate_time_ms rate_valid wx wy wz
+```
+
+The first six fields retain their existing units. `rate_time_ms` is the firmware
+sensor timestamp (uint32 milliseconds); `rate_valid` is 0 or 1; `wx wy wz` are
+signed int32 body-frame **microradians/second**. Invalid rates serialize as zero.
+The simulator accepts both this 12-field form and legacy six-field responses.
+Old simulator versions need updating to consume the extended YUAA response.
+Comparison requires firmware and simulator to share the simulated sensor clock
+(the usual T-driven mode); autonomous firmware-clock streaming is not supported
+by this lockstep comparison. Runs spanning uint32 timestamp rollover must be
+split; the plotting tool does not unwrap firmware timestamps.
