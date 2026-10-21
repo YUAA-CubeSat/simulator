@@ -2,9 +2,80 @@
 
 Basilisk propagates the CubeSat orbit and attitude. The simulator exchanges compact ASCII lines with an ADCS subprocess over stdin/stdout in SITL or with an STM32 over UART in HITL. One YAML file configures the spacecraft, sensors, environment, timing, and interface.
 
+## Install Python and Basilisk
+
+Run these commands from the simulator repository directory. Create a separate
+virtual environment on each machine; do not copy `.venv` between operating
+systems. The instructions use Python 3.13 on Windows/macOS; Ubuntu 22.04/24.04's
+Python 3.10/3.12 also works with the pinned package.
+
+Basilisk's Python import is `Basilisk`, but its official PyPI package is **`bsk`**.
+`requirements.txt` pins `bsk==2.11.1`, matching the version used for local simulator
+tests. The core package contains the dynamics and WMM modules used here; optical
+navigation extras are unnecessary. See the [official installation guide](https://avslab.github.io/basilisk/Install.html).
+
+### Windows 10/11 (64-bit x86, PowerShell)
+
+Install **64-bit Python 3.13** from [python.org](https://www.python.org/downloads/windows/),
+including the Python launcher (`py`). Then:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install --only-binary=bsk -r requirements.txt
+.\.venv\Scripts\python.exe -c "from importlib.metadata import version; from cubesat_sim.physics import Plant; print('Basilisk', version('bsk'), 'imports OK')"
+```
+
+These commands use the environment's interpreter directly, so PowerShell script
+activation is unnecessary. For the Windows HITL commands below, use
+`.\.venv\Scripts\python.exe` wherever `python` is shown. A prebuilt Basilisk
+wheel does not require Visual Studio, CMake, Bash, or a compiler for HITL.
+
+### macOS (Apple Silicon, macOS 11 or newer)
+
+Install Python 3.13 from [python.org](https://www.python.org/downloads/macos/).
+Use a native ARM64 terminal/Python, rather than an Intel process under Rosetta.
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --only-binary=bsk -r requirements.txt
+.venv/bin/python -c "from importlib.metadata import version; from cubesat_sim.physics import Plant; print('Basilisk', version('bsk'), 'imports OK')"
+```
+
+An **Intel Mac** needs a Basilisk source build for this pinned release; follow the
+[official source-build guide](https://avslab.github.io/basilisk/Build.html)
+and its macOS prerequisites in the same virtual environment. The commands above
+intentionally require a wheel instead of silently starting a source build.
+
+### Linux (Ubuntu 22.04/24.04, x86-64 or ARM64)
+
+Install Python and virtual-environment support, then install the prebuilt wheel:
+
+```sh
+sudo apt update
+sudo apt install python3 python3-venv python3-pip
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --only-binary=bsk -r requirements.txt
+.venv/bin/python -c "from importlib.metadata import version; from cubesat_sim.physics import Plant; print('Basilisk', version('bsk'), 'imports OK')"
+```
+
+For other distributions, install equivalent Python/venv packages. The 2.11.1
+Linux wheels require glibc 2.27 or newer; Alpine/musl requires a different setup.
+Available architectures and Python constraints are listed in the
+[Basilisk 2.11.1 release files](https://pypi.org/project/bsk/2.11.1/#files).
+
+The import check exercises the simulator's physics imports without opening a
+serial port or starting a simulation. If pip reports no matching `bsk` wheel,
+check Python version and architecture against those release files, or use the
+source-build guide. Keep Python, pip, and the simulator in the same environment.
+The simulator includes its WMM coefficients in `data/WMM2025.COF`.
+
 ## Quick start
 
-Use the existing virtual environment containing the dependencies in `requirements.txt` (including `tqdm` for terminal progress). On macOS or Linux:
+After completing the installation above, run the example SITL controller on
+macOS or Linux (a C compiler is required for this example):
 
 ```sh
 cc -O2 -Wall -Wextra examples/adcs_example.c -o adcs_example
