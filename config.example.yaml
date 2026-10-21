@@ -91,5 +91,6 @@ sitl:
 
 hitl:
   port: /dev/ttyUSB0
-  baudrate: 115200
+  baudrate: 115200           # OBC 100 Hz HITL: use 921600 and matching firmware build
+  log_usb_rx: false         # enable only when diagnosing protocol errors
   timeout_s: 0.15

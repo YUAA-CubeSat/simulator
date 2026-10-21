@@ -49,6 +49,8 @@ def load_config(path):
     for key in ("half_angle_deg", "noise_std_rad"):
         sensors["sun_sensor"][key] = float(sensors["sun_sensor"][key])
     if "hitl" in c:
+        if type(c["hitl"].get("log_usb_rx", False)) is not bool:
+            raise ValueError("hitl.log_usb_rx must be a boolean")
         c["hitl"]["baudrate"] = int(c["hitl"]["baudrate"])
         c["hitl"]["timeout_s"] = float(c["hitl"]["timeout_s"])
     if s["mode"] not in ("sitl", "hitl") or s["clock"] not in ("simulated", "realtime"):

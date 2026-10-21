@@ -59,7 +59,8 @@ def run(config):
         if output:
             estimator_log = EstimatorLog(output)
         controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
-            config["hitl"], on_receive=lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr)
+            config["hitl"], on_receive=(lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr))
+            if config["hitl"].get("log_usb_rx", False) else None
         )
         periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}
         steps = round(sim["duration_s"] / plant.dt)
@@ -103,7 +104,11 @@ def run(config):
                 remaining = start + (tick + 1) * plant.dt - time.monotonic()
                 if remaining > 0:
                     time.sleep(remaining)
-            progress.set_postfix_str(f"sim {plant.time_s:g}/{sim['duration_s']:g} s", refresh=False)
+            elapsed = max(time.monotonic() - start, 1e-9)
+            progress.set_postfix_str(
+                f"sim {plant.time_s:g}/{sim['duration_s']:g} s, "
+                f"speed {plant.time_s / elapsed:.2f}x, lag {max(0.0, elapsed - plant.time_s):.2f}s",
+                refresh=False)
             progress.update(1)
         return plant
     except KeyboardInterrupt:
