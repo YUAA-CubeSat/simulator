@@ -1,6 +1,11 @@
 /* Example stdin/stdout controller: elementary B-dot detumbling and boom deployment. */
 #include <stddef.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
+#include "../protocol/adcs_wire.h"
 
 static double previous_mag[3], current_mag[3], previous_time, current_time;
 static int have_current, have_previous;
@@ -73,50 +78,40 @@ int adcs_step(double time_s, double dt_s, double dipole_Am2[3], double *boom_len
     return 0;
 }
 
-/* Same integer line protocol as the HITL firmware. stdout is protocol only. */
+/* Binary transport; stdout is protocol only. */
 int main(void)
 {
-    char line[256];
-    while (fgets(line, sizeof line, stdin)) {
-        long long time_ms, tick, period_ms, values[3];
-        int valid, sensor_id;
-        if (line[0] == 'M' && sscanf(line, "M %lld %d %lld %lld %lld",
-                &time_ms, &sensor_id, &values[0], &values[1], &values[2]) == 5
-                && sensor_id >= 0) {
-            double mag[3];
-            for (int i = 0; i < 3; ++i) mag[i] = values[i] * 1e-9;
-            adcs_magnetometer(time_ms / 1000.0, sensor_id, mag);
-        } else if (line[0] == 'C' && sscanf(line, "C %lld %d %lld %lld %lld",
-                &time_ms, &sensor_id, &values[0], &values[1], &values[2]) == 5
-                && sensor_id >= 0) {
-            double accel[3];
-            for (int i = 0; i < 3; ++i) accel[i] = values[i] * 1e-6;
-            adcs_accelerometer(time_ms / 1000.0, sensor_id, accel);
-        } else if (line[0] == 'G' && sscanf(line, "G %lld %lld %lld %lld",
-                &time_ms, &values[0], &values[1], &values[2]) == 4) {
-            double rate[3];
-            for (int i = 0; i < 3; ++i) rate[i] = values[i] * 1e-6;
-            adcs_gyroscope(time_ms / 1000.0, rate);
-        } else if (line[0] == 'S' && sscanf(line, "S %lld %d %lld %lld %lld",
-                &time_ms, &valid, &values[0], &values[1], &values[2]) == 5) {
-            double vector[3];
-            for (int i = 0; i < 3; ++i) vector[i] = values[i] / 32767.0;
-            adcs_sun(time_ms / 1000.0, vector, valid);
-        } else if (line[0] == 'B' && sscanf(line, "B %lld %lld %lld",
-                &time_ms, &values[0], &values[1]) == 3
-                && values[0] >= 0 && values[0] <= 1000) {
-            adcs_battery(time_ms / 1000.0, values[0] / 1000.0, values[1] / 1000.0);
-        } else if (line[0] == 'T' && sscanf(line, "T %lld %lld %lld",
-                &tick, &time_ms, &period_ms) == 3) {
-            double dipole[3], boom;
-            if (adcs_step(time_ms / 1000.0, period_ms / 1000.0, dipole, &boom)) return 1;
-            printf("A %lld %.0f %.0f %.0f %.0f\n", tick,
-                   dipole[0] * 1e6, dipole[1] * 1e6, dipole[2] * 1e6, boom * 1000);
-            if (fflush(stdout) == EOF) return 1;
-        } else {
-            fprintf(stderr, "Invalid simulator message: %s", line);
-            return 1;
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    WireDecoder decoder={0}; WireFrame f; int byte;
+    while((byte=getchar())!=EOF) {
+        if(Wire_Feed(&decoder,(uint8_t)byte,&f)!=1) continue;
+        const uint8_t *p=f.payload; double t=Wire_Get(p,4)/1000.0;
+        double v[3];
+        if(f.type==WIRE_M || f.type==WIRE_C) {
+            unsigned width=f.type==WIRE_M?3:4;
+            for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+5+i*width,width)*(f.type==WIRE_M?1e-9:1e-6);
+            if(f.type==WIRE_M) adcs_magnetometer(t,p[4],v);
+            else adcs_accelerometer(t,p[4],v);
+        } else if(f.type==WIRE_G) {
+            for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+4+i*3,3)*1e-6;
+            adcs_gyroscope(t,v);
+        } else if(f.type==WIRE_S) {
+            for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+5+i*2,2)/32767.0;
+            adcs_sun(t,v,p[4]);
+        } else if(f.type==WIRE_B) adcs_battery(t,Wire_Get(p+4,2)/1000.0,Wire_Signed(p+6,4)/1000.0);
+        else if(f.type==WIRE_T) {
+            double dipole[3],boom;
+            if(adcs_step(Wire_Get(p+4,4)/1000.0,Wire_Get(p+8,2)/1000.0,dipole,&boom)) return 1;
+            uint8_t payload[29]={0},output[WIRE_MAX];
+            Wire_Put(payload,Wire_Get(p,4),4);
+            for(unsigned i=0;i<3;++i) Wire_Put(payload+4+i*3,(uint32_t)(int32_t)(dipole[i]*1e6),3);
+            Wire_Put(payload+13,(uint32_t)(boom*1000),2);
+            size_t n=Wire_Encode(output,sizeof output,WIRE_A,payload);
+            if(!n || fwrite(output,1,n,stdout)!=n || fflush(stdout)==EOF) return 1;
         }
     }
-    return ferror(stdin) ? 1 : 0;
+    return ferror(stdin)?1:0;
 }

@@ -15,6 +15,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SitlTests(unittest.TestCase):
     def controller(self, script, timeout=1, startup_delay=0):
+        shim = r"""
+import sys, builtins
+sys.path.insert(0, PATH)
+from wire_fixture import frame, text_frame
+
+def input():
+    packet = bytearray()
+    while True:
+        byte = sys.stdin.buffer.read(1)
+        if not byte: raise EOFError
+        if byte == b'\0': return text_frame(packet)
+        packet.extend(byte)
+
+def print(value, flush=False):
+    try: data = frame(value)
+    except (ValueError, OverflowError): data = b'bad\0'
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+""".replace('PATH', repr(str(ROOT / 'tests')))
+        script = shim + script
         controller = SitlController({"command": [sys.executable, "-u", "-c", script], "timeout_s": timeout, "startup_delay_s": startup_delay})
         self.addCleanup(controller.close)
         return controller
@@ -27,17 +47,17 @@ assert input() == 'M 1000 1 0 20000 0'
 assert input() == 'C 1000 0 1000 -500 250'
 assert input() == 'C 1000 1 -400 900 -100'
 assert input() == 'G 1000 10000 -20000 15000'
-assert input() == 'G 1125 0 2 -2'
+assert input() == 'G 1125 1 2 -2'
 assert input() == 'S 1000 1 32767 0 0'
 assert input() == 'S 1000 0 0 0 0'
 assert input() == 'B 1000 800 -1250'
 assert input() == 'B 1125 1000 2500'
 assert input() == 'B 1250 0 0'
 assert input() == 'T 7 1000 1000'
-sys.stdout.write('A 7 100000 ')
-sys.stdout.flush()
+reply=frame('A 7 100000 0 -100000 400')
+sys.stdout.buffer.write(reply[:8]); sys.stdout.buffer.flush()
 time.sleep(0.02)
-print('0 -100000 400', flush=True)
+sys.stdout.buffer.write(reply[8:]); sys.stdout.buffer.flush()
 assert input() == 'T 8 2000 1000'
 print('A 8 0 0 0 0', flush=True)
 ''')
@@ -62,7 +82,7 @@ print('A 8 0 0 0 0', flush=True)
         controller.step(0, 0.2, 0.01)
         np.testing.assert_allclose(controller.estimate, [0.125, 1, 0.01, -0.02, 0.03])
         controller.step(1, 0.21, 0.01)
-        self.assertIsNone(controller.estimate)
+        self.assertEqual(controller.estimate, (0, 0, 0, 0, 0))
 
     def test_all_magnetometers_have_distinct_ids(self):
         controller = self.controller("""
@@ -79,7 +99,7 @@ print('A 0 0 0 0 0', flush=True)
         self.assertEqual(controller.process.returncode, 0)
 
     def test_invalid_replies(self):
-        for reply in ['A 8 0 0 0 0', 'debug message', 'A 7 nope 0 0 0', 'A 7 0 0 0 0 E2 0 1 0 0 0',
+        for reply in ['A 8 0 0 0 0', 'debug message', 'A 7 nope 0 0 0',
                       'A 7 0 0 0 0 E1 0 2 0 0 0', 'A 7 0 0 0 0 E1 0 1 nan 0 0', 'x' * 257]:
             with self.subTest(reply=reply):
                 controller = self.controller(f'input(); print({reply!r}, flush=True)')

@@ -9,6 +9,8 @@ import time
 import numpy as np
 import serial
 
+from . import protocol as wire
+
 
 def validate_command(dipole, length):
     dipole = np.asarray(dipole, dtype=float)
@@ -20,9 +22,8 @@ def validate_command(dipole, length):
     return dipole, length
 
 
-class _LineController:
-    def _send(self, line):
-        data = (line + "\n").encode("ascii")
+class _BinaryController:
+    def _send(self, data):
         deadline = time.monotonic() + self.timeout
         offset = 0
         while offset < len(data):
@@ -34,51 +35,61 @@ class _LineController:
                 raise ConnectionError(f"{self.transport} closed during write")
             offset += written
 
+    def _sensor(self, kind, values):
+        # Batch the current cycle into one host write, reducing USB transactions.
+        values[0] &= 0xffffffff  # Millisecond timestamps wrap consistently with firmware.
+        frame = wire.encode(kind, values)
+        if len(self.pending) + len(frame) > 4096:
+            raise ValueError("sensor batch exceeds 4096 bytes; issue a control step")
+        self.pending.extend(frame)
+
     def magnetometers(self, time_s, *readings):
-        time_ms = round(time_s * 1000)
         for sensor_id, reading in enumerate(readings):
-            values = [round(float(x) * 1e9) for x in reading]
-            self._send(f"M {time_ms} {sensor_id} " + " ".join(map(str, values)))
+            self._sensor(wire.M, [wire.quantize(time_s, 1000), sensor_id,
+                                 *(wire.quantize(x, 1e9) for x in reading)])
 
     def accelerometers(self, time_s, *readings):
-        time_ms = round(time_s * 1000)
         for sensor_id, reading in enumerate(readings):
-            values = [round(float(x) * 1e6) for x in reading]
-            self._send(f"C {time_ms} {sensor_id} " + " ".join(map(str, values)))
+            self._sensor(wire.C, [wire.quantize(time_s, 1000), sensor_id,
+                                 *(wire.quantize(x, 1e6) for x in reading)])
 
     def gyroscope(self, time_s, reading):
-        """Send the single gyroscope reading in integer microradians per second."""
-        values = [round(float(x) * 1e6) for x in reading]
-        self._send(f"G {round(time_s * 1000)} " + " ".join(map(str, values)))
+        self._sensor(wire.G, [wire.quantize(time_s, 1000), *(wire.quantize(x, 1e6) for x in reading)])
 
     def sun(self, time_s, vector):
-        values = [round(float(x) * 32767) for x in vector] if vector is not None else [0, 0, 0]
-        self._send("S " + str(round(time_s * 1000)) + " " + str(int(vector is not None)) + " " + " ".join(map(str, values)))
+        values = [wire.quantize(x, 32767) for x in vector] if vector is not None else [0, 0, 0]
+        self._sensor(wire.S, [wire.quantize(time_s, 1000), int(vector is not None), *values])
 
     def battery(self, time_s, soc, power_W):
-        """Send state of charge in permille and signed battery power in mW."""
-        self._send(f"B {round(time_s * 1000)} {round(soc * 1000)} {round(power_W * 1000)}")
+        if not 0 <= soc <= 1:
+            raise ValueError("battery SOC must be in [0, 1]")
+        self._sensor(wire.B, [wire.quantize(time_s, 1000), wire.quantize(soc, 1000), wire.quantize(power_W, 1000)])
 
     def step(self, tick, time_s, dt_s):
-        self.estimate = None  # Legacy controllers have no estimate telemetry.
-        self._send(f"T {tick} {round(time_s * 1000)} {round(dt_s * 1000)}")
+        self.estimate = None
+        period = wire.quantize(dt_s, 1000)
+        if period <= 0:
+            raise ValueError("control period must round to at least 1 ms")
+        request = wire.encode(wire.T, [tick & 0xffffffff, wire.quantize(time_s, 1000) & 0xffffffff, period])
+        self._send(bytes(self.pending) + request)
+        self.pending.clear()
         deadline = time.monotonic() + self.timeout
         while True:
-            if b"\n" in self.buffer:
-                line, _, rest = self.buffer.partition(b"\n")
+            if 0 in self.buffer:
+                packet, _, rest = self.buffer.partition(b"\0")
                 self.buffer = bytearray(rest)
-                fields = line.decode("ascii").split()
-                if len(fields) not in (6, 12) or fields[0] != "A" or int(fields[1]) != tick:
-                    raise ValueError("invalid actuator line or tick mismatch")
-                if len(fields) == 12:
-                    if fields[6] != "E1":
-                        raise ValueError("unknown estimate telemetry version")
-                    epoch, valid, *rates = map(int, fields[7:])
-                    if not 0 <= epoch <= 0xffffffff or valid not in (0, 1) or any(
-                            not -(2**31) <= value < 2**31 for value in rates):
-                        raise ValueError("invalid estimate telemetry")
-                    self.estimate = (epoch / 1000, valid, *(value / 1e6 for value in rates))
-                return validate_command([int(x) / 1e6 for x in fields[2:5]], int(fields[5]) / 1000)
+                if not packet:
+                    continue
+                kind, values = wire.decode(packet)
+                if kind != wire.A or values[0] != (tick & 0xffffffff):
+                    raise ValueError("invalid actuator message or tick mismatch")
+                _, mx, my, mz, boom, epoch, valid, wx, wy, wz = values
+                if valid not in (0, 1) or (not valid and any((wx, wy, wz))):
+                    raise ValueError("invalid estimate telemetry")
+                self.estimate = (epoch / 1000, valid, wx / 1e6, wy / 1e6, wz / 1e6)
+                return validate_command([mx / 1e6, my / 1e6, mz / 1e6], boom / 1000)
+            if len(self.buffer) > wire.MAX_FRAME:
+                raise ValueError("oversized binary actuator frame")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise self._actuator_timeout(tick)
@@ -91,9 +102,6 @@ class _LineController:
             if self.on_receive is not None:
                 self.on_receive(data)
             self.buffer.extend(data)
-            if len(self.buffer) > 256:
-                raise ValueError(f"{self.transport} actuator line exceeds 256 bytes")
-
 
     def _actuator_timeout(self, tick):
         port = getattr(self, "port_name", None)
@@ -104,7 +112,7 @@ class _LineController:
             f"timeout_s={self.timeout:g})")
 
 
-class SitlController(_LineController):
+class SitlController(_BinaryController):
     transport = "SITL"
 
     def __init__(self, config, on_receive=None):
@@ -119,6 +127,7 @@ class SitlController(_LineController):
             raise ValueError("sitl.command must be a nonempty list of strings")
         self.on_receive = on_receive
         self.buffer = bytearray()
+        self.pending = bytearray()
         self.process = subprocess.Popen(command, cwd=config.get("cwd"), stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, bufsize=0)
         try:
@@ -163,7 +172,7 @@ class SitlController(_LineController):
             self.process.stdout.close()
 
 
-class HitlController(_LineController):
+class HitlController(_BinaryController):
     transport = "UART"
 
     def __init__(self, config, on_receive=None):
@@ -193,6 +202,7 @@ class HitlController(_LineController):
             self.serial.close()
             raise
         self.buffer = bytearray()
+        self.pending = bytearray()
 
     def _write(self, data, remaining):
         try:

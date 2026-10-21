@@ -6,6 +6,7 @@ import numpy as np
 import serial
 
 from cubesat_sim.io import HitlController
+from wire_fixture import frame
 
 
 class HitlTests(unittest.TestCase):
@@ -29,16 +30,17 @@ class HitlTests(unittest.TestCase):
     def test_partial_reply_estimate_and_legacy(self):
         received = []
         c = self.controller(on_receive=received.append)
-        self.port.read.side_effect = [b'A 7 100000 ', b'0 -100000 400 E1 1000 1 10000 0 -10000\r\n',
-                                      b'A 8 0 0 0 0\n']
+        self.port.read.side_effect = [frame('A 7 100000 0 -100000 400 E1 1000 1 10000 0 -10000')[:8],
+                                      frame('A 7 100000 0 -100000 400 E1 1000 1 10000 0 -10000')[8:],
+                                      frame('A 8 0 0 0 0')]
         dipole, length = c.step(7, 1, .01)
         np.testing.assert_allclose(dipole, [.1, 0, -.1])
         self.assertEqual(length, .4)
         np.testing.assert_allclose(c.estimate, [1, 1, .01, 0, -.01])
         self.assertEqual(len(received), 2)
-        self.port.write.assert_called_with(b'T 7 1000 10\n')
+        self.port.write.assert_called_with(frame('T 7 1000 10'))
         c.step(8, 1.01, .01)
-        self.assertIsNone(c.estimate)
+        self.assertEqual(c.estimate, (0, 0, 0, 0, 0))
         self.factory.assert_called_once_with(port='COM12', baudrate=115200,
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE,
             timeout=.15, write_timeout=.15, xonxoff=False, rtscts=False, dsrdtr=False)
@@ -46,9 +48,9 @@ class HitlTests(unittest.TestCase):
 
     def test_partial_writes(self):
         c = self.controller()
-        self.port.write.side_effect = [2, 8]
-        c._send('123456789')
-        self.assertEqual(self.port.write.call_args_list[1].args[0], b'3456789\n')
+        self.port.write.side_effect = [2, 7]
+        c._send(b'123456789')
+        self.assertEqual(self.port.write.call_args_list[1].args[0], b'3456789')
 
     def test_read_timeout_and_disconnect(self):
         c = self.controller()
@@ -71,11 +73,11 @@ class HitlTests(unittest.TestCase):
                                   (serial.SerialException('gone'), ConnectionError)]:
             self.port.write.side_effect = failure
             with self.assertRaises(expected):
-                c._send('test')
+                c._send(b'test')
         self.port.write.side_effect = None
         self.port.write.return_value = 0
         with self.assertRaises(ConnectionError):
-            c._send('test')
+            c._send(b'test')
 
     def test_partial_replies_share_one_deadline(self):
         c = self.controller()
@@ -86,7 +88,7 @@ class HitlTests(unittest.TestCase):
         self.port.read.assert_called_once()
 
     def test_invalid_and_oversized_replies(self):
-        for reply in [b'A 8 0 0 0 0\n', b'garbage\n', b'x' * 256]:
+        for reply in [frame('A 8 0 0 0 0'), b'garbage\0', b'x' * 256]:
             c = self.controller()
             self.port.read.return_value = reply
             with self.assertRaises(ValueError):
@@ -108,7 +110,7 @@ class HitlTests(unittest.TestCase):
             events.append('boot')
         with patch('cubesat_sim.io.time.sleep', side_effect=boot):
             c = self.controller()
-        self.port.read.return_value = b'A 0 0 0 0 0\n'
+        self.port.read.return_value = frame('A 0 0 0 0 0')
         c.step(0, 0, .01)
         self.assertEqual(events, ['boot', 'flush'])
 

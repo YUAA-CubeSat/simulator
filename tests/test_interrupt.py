@@ -88,16 +88,26 @@ class InterruptTests(unittest.TestCase):
             config = self.config(output)
             # A real controller subprocess signals its parent while it waits for
             # an actuator reply, after both scheduled and unscheduled steps.
-            script = """
+            script = r"""
 import os, signal, sys
-for line in sys.stdin:
-    fields = line.split()
-    if fields[0] == 'T':
-        if fields[1] == '6':
+sys.path.insert(0, ROOT_PATH)
+from cubesat_sim.protocol import decode, encode, T, A
+packet=bytearray()
+while True:
+    byte=sys.stdin.buffer.read(1)
+    if not byte: break
+    if byte != b'\0':
+        packet.extend(byte)
+        continue
+    kind, values=decode(packet)
+    packet.clear()
+    if kind == T:
+        if values[0] == 6:
             os.kill(os.getppid(), signal.SIGINT)
         else:
-            print('A ' + fields[1] + ' 100000 0 0 0', flush=True)
-"""
+            sys.stdout.buffer.write(encode(A,[values[0],100000,0,0,0,0,0,0,0,0]))
+            sys.stdout.buffer.flush()
+""".replace('ROOT_PATH', repr(str(ROOT)))
             config["sitl"].update(command=[sys.executable, "-u", "-c", script], startup_delay_s=0)
             config_path = path / "config.yaml"
             config_path.write_text(yaml.safe_dump(config))

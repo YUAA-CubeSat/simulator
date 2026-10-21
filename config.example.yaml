@@ -1,4 +1,5 @@
 simulation:
+  max_realtime_lag_s: 0.25  # stop if real-time execution falls behind this limit
   mode: sitl                  # sitl or hitl
   clock: simulated            # simulated or realtime; hitl requires realtime
   start_utc: "2026-09-18T00:00:00Z"

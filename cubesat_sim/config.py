@@ -36,6 +36,9 @@ def load_config(path):
         raise ValueError("simulation.start_utc must include a UTC offset")
     s["start_utc"] = start.astimezone(timezone.utc).isoformat()
     s["seed"] = int(s["seed"])
+    s["max_realtime_lag_s"] = float(s.get("max_realtime_lag_s", 0.25))
+    if not math.isfinite(s["max_realtime_lag_s"]) or s["max_realtime_lag_s"] <= 0:
+        raise ValueError("simulation.max_realtime_lag_s must be positive and finite")
     s.setdefault("checkpoint_steps", 1000)
     if type(s["checkpoint_steps"]) is not int or s["checkpoint_steps"] < 0:
         raise ValueError("simulation.checkpoint_steps must be a nonnegative integer (0 disables checkpointing)")

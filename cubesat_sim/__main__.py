@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .config import load_config
 from .io import HitlController, SitlController
 from .estimator_log import EstimatorLog
+from .pacing import pace
 
 
 def telemetry_row(plant, applied):
@@ -101,9 +102,7 @@ def run(config):
                 file.flush()
                 os.fsync(file.fileno())
             if sim["clock"] == "realtime":
-                remaining = start + (tick + 1) * plant.dt - time.monotonic()
-                if remaining > 0:
-                    time.sleep(remaining)
+                pace(start, plant.time_s, sim.get("max_realtime_lag_s", 0.25))
             elapsed = max(time.monotonic() - start, 1e-9)
             progress.set_postfix_str(
                 f"sim {plant.time_s:g}/{sim['duration_s']:g} s, "

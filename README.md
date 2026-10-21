@@ -1,6 +1,6 @@
 # CubeSat SITL/HITL simulator
 
-Basilisk propagates the CubeSat orbit and attitude. The simulator exchanges compact ASCII lines with an ADCS subprocess over stdin/stdout in SITL or with an STM32 over UART in HITL. One YAML file configures the spacecraft, sensors, environment, timing, and interface.
+Basilisk propagates the CubeSat orbit and attitude. The simulator exchanges compact binary frames with an ADCS subprocess over stdin/stdout in SITL or with an STM32 over UART in HITL. One YAML file configures the spacecraft, sensors, environment, timing, and interface.
 
 ## Install Python and Basilisk
 
@@ -212,7 +212,7 @@ Existing shared-library configurations must replace `sitl.library` and the symbo
 
 ## Independent timing
 
-SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. Set `hitl.log_usb_rx: true` to also print received USB/UART data above the bar as `USB RX: b'A ...\n'`. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
+SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. Set `hitl.log_usb_rx: true` to also print received USB/UART data above the bar as raw binary byte strings. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
 `step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `gyroscope_period_s`, `sun_period_s`, and `control_period_s` independently schedule the five ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, gyroscope, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
@@ -222,139 +222,37 @@ that long after opening the port, then clears buffered startup output before
 sending sensor/control packets. This is separate from `hitl.timeout_s`, the
 per-exchange deadline; it is not a readiness handshake. The default delay is zero.
 
-For the current sibling `YUAA_cubesat` firmware, build with
-`-DSIM_TARGET=HITL -DSIM_CLOCK=SIMULATED` for this simulator. Select
-`-DSIM_TRANSPORT=USB` (the HITL default) for USB CDC, or `-DSIM_TRANSPORT=UART`
-for the board's COM1/USART3 interface. Select the corresponding host serial
-port; `.venv/bin/python -m serial.tools.list_ports -v` (or the Windows interpreter
-equivalent) helps identify it. UART baud must match the board configuration
-(currently 115200 in `Core/Src/main.c`). USB CDC is not limited by an asynchronous
-UART's configured baud rate. Older `YUAA_ADCS_*` build options and UART5/FTDI
-port instructions do not describe this firmware checkout.
+For YUAA development-board HITL, use `-DSIM_TARGET=HITL` and select
+`-DSIM_CLOCK=REALTIME` for RTOS receipt timestamps, or `SIMULATED` for host
+sensor timestamps. Both now use matching-tick request/reply. Choose
+`-DSIM_TRANSPORT=USB` for USB CDC or `UART` for COM1/USART3; match the UART
+baud configured in `Core/Src/main.c` (currently 115200). USB CDC throughput is
+not determined by the configured UART baud rate.
 
-`simulation.clock: realtime` controls host pacing; it does not mean
-`SIM_CLOCK=REALTIME` on the firmware. The latter enables an autonomous RTOS
-clock, retimestamps sensor samples, and does not submit received `T` requests.
-It is incompatible with this simulator's matching-tick request/reply loop.
-An `actuator command timed out` error means a complete reply did not arrive;
-check the transport, firmware clock mode, selected port, and whether a debugger
-has halted the board. The current firmware defaults to `SIM_CLOCK=REALTIME`,
-so explicitly select `SIMULATED` for this workflow.
+For the production OBC, select USB-C FTDI/UART5 and build with
+`YUAA_ADCS_DEVELOPMENT=ON`, `YUAA_ADCS_SIM_REALTIME=ON`, and
+`YUAA_ADCS_UART_BAUDRATE=921600`. Match `hitl.baudrate: 921600`.
+The VS Code realtime build task includes these settings. Physical actuator
+build switches remain independent. A timeout means a complete binary A reply
+did not arrive; confirm matching firmware/protocol versions, baud and port.
 
-## SITL/HITL line protocol
+## SITL/HITL binary protocol
 
-Both modes use ASCII lines with space-separated decimal integers and LF (`\n`)
-termination. The simulator also accepts CRLF replies. SITL uses the child
-process's stdin/stdout; HITL uses `pyserial` with 8N1 and no flow control. For
-HITL, set `simulation.mode: hitl`, `simulation.clock: realtime`, and `hitl.port`.
-The wire protocol is identical in both modes and both host clock settings.
-Sensor/status lines update controller inputs; only `T` requests a reply.
-Diagnostics must not be mixed into the reply stream.
+Both transports use [ADCS binary protocol v1](PROTOCOL.md): 3-bit message IDs,
+quantized integer values, COBS framing and CRC16. Rebuild the C example and both
+firmwares; ASCII replies are no longer accepted. The simulator batches due sensor
+packets and the control request into one write, then waits for the matching reply.
+The specification includes exact layouts, units, ranges and error handling.
 
-The implementation is in [`cubesat_sim/io.py`](cubesat_sim/io.py), with scheduling
-in [`cubesat_sim/__main__.py`](cubesat_sim/__main__.py). All outgoing scaled values
-and times use Python `round()` (nearest integer, ties to even). `time_ms` is
-elapsed **simulation time**, starting at zero, not UTC or host wall time.
-`tick` is the zero-based **dynamics-step index**, not a control-request counter:
-with a 10 ms dynamics step and 100 ms control period, request ticks are 0, 10,
-20, ... . `period_ms` is the configured control period rounded to milliseconds.
-The current YUAA parser requires positive `period_ms`, uint32 times/ticks, and
-signed int32 M/C/G components; choose periods and run lengths accordingly.
-The Python sender does not clamp these fields to the firmware's integer ranges.
+Sensor readings remain raw in each configured sensor frame. Firmware calibration
+must use the inverse of the simulator's `body_to_sensor` rotation. Accelerometers
+measure non-gravitational specific force, not orbital gravitational acceleration.
+Estimated rate telemetry is included in every reply; invalid rates are zero.
 
-Each magnetometer sends its raw simulated reading in its configured sensor frame, including bias and noise, without calibration or sensor fusion. Readings are quantized to integer nT, not hardware ADC counts. One `M` line is sent per sensor at each magnetometer update, with the same timestamp and a zero-based `sensor_id` matching its position in `sensors.magnetometers`. The simulator supports any nonempty magnetometer list; the controller must be built with enough sensor slots for every transmitted ID. The Sun vector is a unit vector in the body frame when valid, otherwise zero. Both transports use the integer units below, so SITL now has the same quantization as HITL.
-
-Two accelerometers are configured in the supplied SITL/HITL YAML files. Each sends one `C` line per `accelerometer_period_s` update, including time zero. IDs are zero-based indices into `sensors.accelerometers`, independent of magnetometer IDs; all accelerometers in an update share a timestamp. The simulator supports any nonempty accelerometer list; the controller must have matching sensor capacity. Each reading is `body_to_sensor × specific_force_body + bias_m_s2 + noise`, with independent zero-mean Gaussian noise per axis and sensor, specified by `noise_std_m_s2`. Values are rounded to the nearest integer µm/s² (ties to even), with identical encoding on both transports. These are raw sensor-frame values without calibration or fusion, not ADC counts or units of g.
-
-One three-axis gyroscope is configured as the single mapping `sensors.gyroscope` (not a list). It sends one `G time_ms x y z` line, without a sensor ID, at time zero and every `simulation.gyroscope_period_s`. It measures spacecraft angular velocity relative to the inertial frame: `body_to_sensor × omega_BN_B + bias_rad_s + noise`. The rotation is a proper 3×3 body-to-sensor matrix, bias is a finite three-vector in rad/s, and `noise_std_rad_s` is a finite nonnegative Gaussian standard deviation per sample per axis in rad/s. Noise has zero mean and samples are independent across axes and updates; zero disables noise. The supplied configurations use body alignment, zero bias, and an illustrative standard deviation of `1e-4` rad/s. Bias drift, scale-factor error, and saturation are not modeled. Both transports round to integer µrad/s (rad/s × 1,000,000, ties to even); these are raw sensor-frame readings, not degrees/s or ADC counts.
-
-Existing SITL/HITL configurations must add `simulation.gyroscope_period_s` (positive, finite, and an integer multiple of `step_s`) and `sensors.gyroscope`, as in `config.example.yaml`. Controllers must parse or explicitly ignore `G` messages; rebuild the C example, which decodes them into `adcs_gyroscope(time_s, rate_rad_s)` while retaining B-dot control. Include one additional line per gyroscope update when budgeting UART bandwidth. Orbit-only solar mode does not instantiate the gyroscope or require these keys.
-
-**Before each SITL/HITL run, verify that every magnetometer, accelerometer, and gyroscope's `body_to_sensor` rotation matches the firmware calibration for that sensor (and ID where applicable).** The firmware's sensor-to-body rotation must be the inverse (transpose) of the configured `body_to_sensor` matrix before readings are combined or used for body-frame control. Identity firmware calibration requires body-aligned sensors (`body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]`), as configured for both sensor pairs and the gyroscope in `config.blast.yaml`. The other example configurations may use rotated sensors; check their calibration explicitly.
-
-Accelerometers measure non-gravitational specific force at Basilisk's body reference point, using `nonConservativeAccelpntB_B`. Both sensors are co-located there; sensor offsets and rotational lever-arm acceleration are not modeled. With the current central-gravity and torque-only dynamics, ideal readings are zero in free fall, with configured bias and noise added. Orbital gravitational acceleration is not an accelerometer reading.
-
-Existing configurations must add `simulation.accelerometer_period_s` (a positive integer multiple of `step_s`) and `sensors.accelerometers`, as in `config.example.yaml`. Controllers must parse or explicitly ignore `C` messages before running this version. Rebuild the C example using the Quick start command; it decodes `C` into `adcs_accelerometer(time_s, sensor_id, accel_m_s2)` while retaining its B-dot control law. `A` remains the actuator response message. Include both accelerometer lines when budgeting UART bandwidth.
-
-| Direction | Line | Units |
-| --- | --- | --- |
-| Simulator → Controller | `M time_ms sensor_id x y z` | magnetic readings, nT |
-| Simulator → Controller | `C time_ms sensor_id x y z` | specific force, µm/s² (integer = m/s² × 1,000,000) |
-| Simulator → Controller | `G time_ms x y z` | angular velocity, µrad/s (integer = rad/s × 1,000,000) |
-| Simulator → Controller | `S time_ms valid sx sy sz` | Sun body vector × 32767, rounded; `valid` is 0 or 1 (scale is 32767, not 32768) |
-| Simulator → Controller | `B time_ms soc_permille power_mW` | battery state of charge, 0–1000; signed net battery power, mW |
-| Simulator → Controller | `T tick time_ms period_ms` | request a control response; dynamics-step index, simulation ms, control-period ms |
-| Controller → Simulator | `A tick mx my mz boom` | legacy reply: body-frame dipoles, µA·m²; absolute boom target, mm |
-| Controller → Simulator | `A tick mx my mz boom E1 rate_time_ms rate_valid wx wy wz` | extended reply: same actuators plus rate-estimate sensor epoch in ms, validity 0/1, body-frame rates in µrad/s |
-
-Example exchange at simulation time 1 s with 10 ms dynamics/control periods
-(sensor values are illustrative; only sensors due at this step are sent):
-
-```text
-M 1000 0 10000 0 -10000
-M 1000 1 0 20000 0
-C 1000 0 1000 -500 250
-C 1000 1 -400 900 -100
-G 1000 10000 -20000 15000
-S 1000 1 32767 0 0
-B 1000 800 -750
-T 100 1000 10
-A 100 100000 0 -100000 500 E1 1000 1 10000 -20000 15000
-```
-
-The controller must send exactly one `A` reply for each `T`, echoing its tick.
-No acknowledgement is expected for `M`, `C`, `G`, `S`, or `B`. Due sensor messages
-are sent in M/C/G/S order, followed by B and T when control is due. The simulator
-waits for the reply before advancing dynamics; returned commands are held until
-the next control exchange. Real-time pacing does not change this lockstep order.
-
-Both the six-token legacy reply and twelve-token extended reply are accepted
-(counting `A` and `E1` as tokens). The bundled C example emits the legacy form;
-the current YUAA response formatter emits the extended form. Send one form,
-not both. `E1` is part of the same line, not a separate packet. Its epoch must
-be uint32 milliseconds, validity must be 0 or 1, and rates must be signed int32
-µrad/s. The rates represent estimated inertial angular velocity expressed in
-body axes, not orbit-relative rates or the filtered libration residual. The
-firmware emits zero components for invalid estimates; the simulator checks
-ranges but does not require invalid components to be zero. A legacy reply
-clears the current estimate rather than retaining the previous one. See
-[Firmware estimator comparison](#firmware-estimator-comparison) for logging and clock requirements.
-
-Replies may arrive in fragments. A single wall-clock response deadline starts
-after the T line is written; receiving a fragment does not restart it. Each
-outgoing line has a separate write deadline, using the selected transport's
-`timeout_s`. The parser rejects unknown extension versions, wrong token counts,
-non-ASCII/malformed values, and mismatched ticks. It stops rather than skipping
-debug lines, retrying requests, or accepting stale replies. Keep each response,
-including its newline, within 256 bytes: the accumulated receive buffer is
-rejected when it exceeds 256 bytes. Timeout diagnostics include the expected
-tick, partial-reply byte count, timeout, and HITL port name.
-
-`mx my mz` are commanded dipoles, not torque. The plant clips them to configured
-per-axis limits. `boom` is an absolute target length, not an extension increment;
-it is clipped to travel limits and approached at the configured maximum speed.
-`S` sends a zero vector when `valid=0`. The example controller receives all sensor
-messages but uses only magnetometer 0 for B-dot control and keeps the boom retracted.
-For UART bandwidth sizing, count the entire sensor/status/T exchange and the
-extended reply; see [Real-time throughput and zero outputs](#real-time-throughput-and-zero-outputs).
-
-`B time_ms soc_permille power_mW` is sent immediately before every `T`, using the
-same simulation timestamp, in both SITL and HITL. `soc_permille` is the current
-stored energy divided by capacity, multiplied by 1000 and rounded to the nearest
-integer (800 means 80.0%). `power_mW` is signed net **battery** power, rounded to
-the nearest milliwatt: positive means charging, negative means discharging, and
-zero means no stored-energy change. It includes charging losses and full/empty
-battery clamping; it is not gross panel output or actuator demand. For example,
-`B 1000 800 -750` reports 80.0% charge and 0.750 W discharge at one second.
-
-Power describes the last completed dynamics step, matching CSV `battery_power_W`,
-not the average since the previous control request. At time zero the message is
-`B 0 <round(battery_initial_soc * 1000)> 0` (for example, `B 0 800 0`
-with the supplied 0.8 setting): no dynamics interval has elapsed yet. Battery updates are independent
-of CSV output and `telemetry_period_s`. Controllers must add a `B` parser (or
-explicitly ignore it) before using this version; rebuild the example executable
-with the Quick start command. The C example decodes it into `adcs_battery(time_s,
-soc, power_W)` without changing its B-dot control law.
+Real-time runs use absolute monotonic deadlines and stop if lag exceeds
+`simulation.max_realtime_lag_s` (default 0.25 seconds). Reducing bytes does not
+synchronize independent clocks or guarantee deadlines. Retain 921600 baud for the
+OBC's 10 ms full sensor exchange; it still exceeds the 115200-baud budget.
 
 ## Environment and physical model
 
@@ -748,14 +646,11 @@ contain no valid estimates. It has no attitude estimator; only attitude truth is
 recorded/plotted. Rates are the absolute fused inertial angular velocity expressed
 in body axes, not the high-pass libration residual.
 
-The `E1` response fields and validation rules are specified in the
-[SITL/HITL line protocol](#sitlhitl-line-protocol) above. Legacy replies have no
-estimate; an extended reply with `rate_valid=0` has an explicitly invalid one.
-Old simulator versions need updating to consume the extended YUAA response.
-Comparison requires firmware and simulator to share the simulated sensor clock
-(the usual T-driven mode); autonomous firmware-clock streaming is not supported
-by this lockstep comparison. Runs spanning uint32 timestamp rollover must be
-split; the plotting tool does not unwrap firmware timestamps.
+The binary A telemetry fields are specified in [PROTOCOL.md](PROTOCOL.md).
+Every response contains an estimate validity flag; invalid rates are zero.
+For direct truth/error comparison, use firmware simulated time so sensor epochs
+share the simulator's clock. In RTOS mode the epochs differ; the comparison tool
+does not automatically align them or unwrap uint32 timestamp rollover.
 
 ### Real-time throughput and zero outputs
 
@@ -771,6 +666,6 @@ This is additional transport headroom, not a guarantee that the host and USB pat
 The OBC development estimator requires magnetic samples no more than 20 ms apart
 and at least three observations. Slower exchanges can repeatedly reset the derivative
 estimate and keep magnetic commands zero. Do not increase the control period to work
-around throughput without revisiting estimator timing. `E1 ... 0 0 0 0` rate telemetry
+around throughput without revisiting estimator timing. Invalid rate telemetry
 is expected during detumbling/deployment: the preserved algorithm computes rates only
 in pointing mode. Zero rate validity alone therefore does not diagnose a sensor failure.

@@ -1,3 +1,4 @@
+from wire_fixture import frame, text_frame
 import copy
 import os
 import pty
@@ -180,11 +181,11 @@ class SimulatorTests(unittest.TestCase):
                 data = bytearray()
                 while len(lines) < 8:
                     data.extend(os.read(master, 1024))
-                    while b"\n" in data:
-                        line, _, rest = data.partition(b"\n")
-                        lines.append(line.decode("ascii"))
+                    while b"\0" in data:
+                        line, _, rest = data.partition(b"\0")
+                        lines.append(text_frame(line))
                         data = bytearray(rest)
-                os.write(master, b"A 7 100000 0 -100000 400\n")
+                os.write(master, frame("A 7 100000 0 -100000 400"))
 
             thread = threading.Thread(target=board)
             thread.start()
@@ -207,7 +208,7 @@ class SimulatorTests(unittest.TestCase):
             self.assertAlmostEqual(dipole[0], 0.1)
             self.assertAlmostEqual(dipole[2], -0.1)
             self.assertEqual(boom, 0.4)
-            self.assertEqual(b"".join(received), b"A 7 100000 0 -100000 400\n")
+            self.assertEqual(b"".join(received), frame("A 7 100000 0 -100000 400"))
             thread.join(timeout=1)
             self.assertFalse(thread.is_alive())
         finally:
