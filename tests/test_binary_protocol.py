@@ -56,7 +56,8 @@ int main(void) {
             (w.S, [42, 1, -32768, 32767, 0]),
             (w.B, [42, 1000, -2147483648]),
             (w.T, [0xffffffff, 0xffffffff, 65535]),
-            (w.A, [42, -200000, 0, 200000, 3000, 123, 1, 0, -12345, 54321])]
+            (w.A, [42, -200000, 0, 200000, 3000, 123, 1, 0, -12345, 54321]),
+            (w.U, [42, -200000, 0, 200000, 3000, 123, 1, 0, -12345, 54321, 0xffffffff, 9, 100, 0xffffff00, 1])]
         frames = b''.join(w.encode(kind, values) for kind, values in fixtures)
         with tempfile.TemporaryDirectory() as tmp:
             src=Path(tmp)/'codec.c'; src.write_text(source)
@@ -93,6 +94,9 @@ int main(void) {
             c.rates.valid=step.sensors.have_gyro; c.rates.time_ms=step.sensors.gyro_time;
             char out[WIRE_MAX]; int n=Sim_FormatResponse(out,sizeof out,&c);
             if(!n || fwrite(out,1,n,stdout)!=(size_t)n) return 2;
+            WireSync sync={.tick=7,.host_ms=200,.local_ms=500,.valid=true};
+            n=Sim_FormatStream(out,sizeof out,&c,510,&sync);
+            if(!n || fwrite(out,1,n,stdout)!=(size_t)n) return 3;
         }
     }
     return 0;
@@ -119,8 +123,10 @@ int main(void) {
                 subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                                 *('-I'+str(p) for p in includes),str(src),str(implementation),'-lm','-o',str(exe)],check=True)
                 result=subprocess.run([str(exe)], input=frames,capture_output=True,check=True)
-                self.assertEqual(w.decode(result.stdout[:-1]),
-                                 (w.A,[0xffffffff,-200000,0,200000,3000,101,1,10000,-20000,30000]))
+                a,u,_=result.stdout.split(b'\0')
+                expected=[0xffffffff,-200000,0,200000,3000,101,1,10000,-20000,30000]
+                self.assertEqual(w.decode(a), (w.A,expected))
+                self.assertEqual(w.decode(u), (w.U,expected+[510,7,200,500,1]))
 
     def test_absolute_pacing_and_overrun(self):
         from unittest.mock import patch

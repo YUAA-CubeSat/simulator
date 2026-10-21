@@ -2,15 +2,14 @@
 
 This is the shared simulator ↔ YUAA development board ↔ OBC wire contract.
 It replaces the ASCII line protocol completely. Upgrade both endpoints together;
-there is no automatic fallback or negotiation. `M/C/G/S/B/T/A` below are names
+there is no automatic fallback or negotiation. `M/C/G/S/B/T/A/U` below are names
 for numeric identifiers, **not transmitted ASCII characters**.
 
 ## Framing
 
 A frame is `COBS(header || payload || crc16_le) || 0x00`. COBS removes all zero
 bytes from the encoded body; zero is the frame delimiter. The one-byte header
-contains `version=1` in bits 7–3 and the **3-bit type** in bits 2–0. Type 7 is
-reserved. Payload sizes are fixed by type; no length field is needed.
+contains `version=1` in bits 7–3 and the **3-bit type** in bits 2–0. Type 7 carries autonomous output. Payload sizes are fixed by type; no length field is needed.
 
 CRC is CRC-16/CCITT-FALSE: polynomial `0x1021`, initial `0xffff`, no reflection,
 no final XOR. It covers the unencoded header and payload; its two bytes are
@@ -20,10 +19,9 @@ body is 64 bytes, excluding the delimiter. Empty delimiters are ignored.
 Firmware buffers a complete frame and verifies framing, version, length, CRC,
 and field constraints before publishing data. Corrupt/oversized frames are
 ignored through the next delimiter. A lost delimiter can discard two frames;
-the following valid frame resynchronizes. No retransmission occurs: missing
-control requests eventually time out, and cached readings retain their original
-freshness limits. The simulator stops on a corrupt, unexpected, or wrong-tick
-reply instead of applying an uncertain command. UART/USB diagnostics must use a
+the following valid frame resynchronizes. No sensor retransmission occurs; cached readings retain their freshness limits.
+Lockstep stops on corrupt or wrong-tick replies. Autonomous reception discards
+corrupt frames and stops if no fresh synchronized command arrives within the watchdog. UART/USB diagnostics must use a
 separate channel. Serial configuration is 8N1, no flow control.
 
 ## Payloads and units
@@ -42,6 +40,8 @@ and remain in the sensor frame; calibration/fusion still belongs to firmware.
 | B | 4 | time_ms:u32, soc_permille:u16, power_mW:i32 | 10 | 15 |
 | T | 5 | tick:u32, time_ms:u32, period_ms:u16 | 10 | 15 |
 | A | 6 | tick:u32, dipole_xyz:3×i24, boom_mm:u16, rate_time_ms:u32, rate_valid:u8, rate_xyz:3×i24 | 29 | 34 |
+
+| U | 7 | sequence:u32, dipole_xyz:3×i24, boom_mm:u16, rate_time_ms:u32, rate_valid:u8, rate_xyz:3×i24, local_ms:u32, sync_tick:u32, sync_host_ms:u32, sync_local_ms:u32, sync_valid:u8 | 46 | 51 |
 
 Quantization rounds to nearest integer, ties **away from zero**. Values outside
 the representable range cause a host error rather than wrapping or saturating.
@@ -65,20 +65,51 @@ the representable range cause a host error rather than wrapping or saturating.
 
 ## Exchange and clocks
 
-The simulator queues due M/C/G/S readings, then B and T, into **one host write**.
-Each valid T produces exactly one A with the identical tick; other packet types
-produce no reply. T commits the preceding sensor snapshot. The simulator waits
-for A before advancing the dynamics and holds the command until the next exchange.
-A response deadline covers the entire frame; fragments never restart it.
-The batch is bounded to 4096 bytes. There is no acknowledgement/retry of individual
-sensor packets, and no claim that all packets in a batch were received atomically.
+### Real-time autonomous mode
 
-In simulated time, firmware uses host time_ms. In real-time simulation, both OBC
-and YUAA replace sensor timestamps with RTOS receipt time and execute T at RTOS
-time, while echoing the host tick. A.rate_time_ms is then in the RTOS epoch,
-not necessarily the simulator epoch. Host period/time cannot advance the RTOS
-clock. YUAA real-time simulation now uses this request/reply contract instead of
-its former unsolicited output stream. Physical sensor mode is unchanged.
+Both firmwares run control on the RTOS clock and emit U commands without waiting
+for T. The simulator batches due sensor packets into one write, drains available
+output without blocking for a reply, and holds the newest fresh command between
+updates. This introduces normal sample/hold latency rather than same-step pairing.
+Before the first synchronized U, the simulator applies zero commands.
+
+`hitl.exchange: autonomous` is the default. Set `sync_period_s: 1.0` (default)
+to send occasional T anchors. T contains a session-randomized, incrementing token
+in `tick`, simulator time in `time_ms`, and the configured control period.
+Firmware records the T receipt RTOS time and echoes that anchor in every U.
+T never triggers output, changes control cadence, or resets/advances the RTOS clock.
+U.sequence is a firmware output counter, not a T token; sync_valid is 0 until the
+first T and 1 thereafter. U.local_ms is the RTOS transmit timestamp. The first
+29 payload bytes have A's layout, with sequence replacing tick.
+
+The simulator maps firmware epochs using
+`simulation_time = sync_host_time + signed32(epoch - sync_local_ms)/1000`.
+It checks command age against the host monotonic time at anchor transmission,
+including outbound transit conservatively. Random session tokens reject buffered
+previous-run output; ordered sequences reject duplicates. The latest 16 anchors
+are retained. A lost occasional T does not interrupt output or invalidate the
+previous anchor immediately. Startup retries T at most every timeout/3 until a
+synchronized U arrives. This is timestamp alignment, not oscillator discipline.
+
+`timeout_s` bounds writes and the age/silence of fresh synchronized output, not
+an individual T reply. Bad CRC/oversized frames are discarded and counted; a stale
+stream still stops the run. Firmware sensor freshness and pulse limits remain
+active without T. OBC development mode also inhibits motion after one second
+without sensor input; periodic cache publication does not renew that watchdog.
+
+### Simulated-clock lockstep mode
+
+Use `exchange: lockstep` (the SITL default and required for the native example).
+The simulator batches M/C/G/S, B and T. Each valid T commits the preceding sensor
+snapshot and produces one A with the same tick. The simulator waits for A before
+advancing dynamics. Host timestamps advance firmware simulated time; pauses freeze
+it. The response deadline covers the whole frame and fragments never restart it.
+Use `sitl.exchange: autonomous` for real-time Renode firmware instead.
+
+Sensor batches are bounded to 4096 bytes. Neither mode acknowledges individual
+sensor packets or guarantees atomic receipt of the entire batch. Real-time firmware
+stamps sensor receipt with RTOS time. Both endpoints must be updated together for
+U; receiving A while configured autonomous is an explicit mode mismatch.
 
 Binary encoding reduces traffic but cannot eliminate host/USB scheduling jitter
 or oscillator differences. The simulator uses absolute monotonic deadlines
@@ -88,9 +119,11 @@ rather than silently running the plant slower than the firmware clock. Choose a
 smaller bound for stricter experiments; this is a detection limit, not automatic
 clock synchronization. No physics steps or sensor samples are skipped to catch up.
 
-A cycle with two M, two C, one G, B, T and A uses **164 bytes**, including framing
-and CRC (180 with a sun update). Sequential wire time is about 1.78 ms at 921600
-baud, or 14.24 ms at 115200. **Binary alone still cannot fit that full exchange
+A lockstep cycle with two M, two C, G, B, T and A uses **164 bytes**.
+An autonomous cycle with those sensors and U uses **166 bytes**, plus a 15-byte T
+once per synchronization interval (and 16 bytes for each sun update). At 921600
+baud, 166 bytes occupy about 1.80 ms; at 115200, 14.41 ms. Autonomous streaming
+removes the round-trip wait; it does not reduce the byte count. **Binary alone still cannot fit that full exchange
 into 10 ms at 115200.** Retain 921600 for the OBC 100 Hz experiment, with matching
 `YUAA_ADCS_UART_BAUDRATE` and `hitl.baudrate`; leave `hitl.log_usb_rx: false`.
 YUAA UART speed remains its configured board speed; native USB CDC baud settings

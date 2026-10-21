@@ -86,12 +86,15 @@ sensors:
     noise_std_rad: 0.002
 
 sitl:
+  exchange: lockstep        # native/simulated-clock; use autonomous for REALTIME Renode
   command: [./adcs_example]   # executable and arguments; relative to this config
   startup_delay_s: 5.0       # boot grace period before sending any messages
   timeout_s: 1.0             # wall-clock response/write deadline after startup
 
 hitl:
+  exchange: autonomous      # requires firmware built with the RTOS clock
+  sync_period_s: 1.0        # occasional T timestamp anchors, not control triggers
   port: /dev/ttyUSB0
   baudrate: 115200           # OBC 100 Hz HITL: use 921600 and matching firmware build
   log_usb_rx: false         # enable only when diagnosing protocol errors
-  timeout_s: 0.15
+  timeout_s: 0.15           # fresh stream age/silence watchdog in autonomous mode

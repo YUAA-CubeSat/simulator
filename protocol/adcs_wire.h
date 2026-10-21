@@ -8,12 +8,13 @@
 #include <string.h>
 #define WIRE_MAX 64U
 #define WIRE_VERSION 1U
-enum { WIRE_M, WIRE_C, WIRE_G, WIRE_S, WIRE_B, WIRE_T, WIRE_A };
+enum { WIRE_M, WIRE_C, WIRE_G, WIRE_S, WIRE_B, WIRE_T, WIRE_A, WIRE_U };
+typedef struct { uint32_t tick, host_ms, local_ms; bool valid; } WireSync;
 typedef struct { uint8_t type, payload[48]; size_t length; } WireFrame;
 typedef struct { uint8_t data[WIRE_MAX]; size_t used; bool discard; } WireDecoder;
 static inline size_t Wire_Size(unsigned type) {
-    const uint8_t sizes[]={14,17,13,11,10,10,29};
-    return type<7 ? sizes[type] : 0;
+    const uint8_t sizes[]={14,17,13,11,10,10,29,46};
+    return type<8 ? sizes[type] : 0;
 }
 static inline uint32_t Wire_Get(const uint8_t *p,unsigned n) {
     uint32_t v=0; for(unsigned i=0;i<n;++i) v|=(uint32_t)p[i]<<(8*i); return v;

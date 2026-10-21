@@ -5,7 +5,7 @@ See PROTOCOL.md. No implicit saturation: out-of-range values are errors.
 import binascii
 import math
 
-M, C, G, S, B, T, A = range(7)
+M, C, G, S, B, T, A, U = range(8)
 # (width in bytes, signed). Header has five version bits and three type bits.
 U32 = (4, False)
 I24 = (3, True)
@@ -21,6 +21,7 @@ FIELDS = (
     (U32, U16, I32),
     (U32, U32, U16),
     (U32, I24, I24, I24, U16, U32, U8, I24, I24, I24),
+    (U32, I24, I24, I24, U16, U32, U8, I24, I24, I24, U32, U32, U32, U32, U8),
 )
 MAX_FRAME = 64
 

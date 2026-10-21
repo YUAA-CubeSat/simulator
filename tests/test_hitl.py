@@ -20,7 +20,7 @@ class HitlTests(unittest.TestCase):
         selector = patch('cubesat_sim.io.select.select', side_effect=AssertionError('Unix I/O'))
         selector.start()
         self.addCleanup(selector.stop)
-        self.config = {'port': 'COM12', 'baudrate': 115200, 'timeout_s': 0.15}
+        self.config = {'port': 'COM12', 'baudrate': 115200, 'timeout_s': 0.15, 'exchange': 'lockstep'}
 
     def controller(self, **kwargs):
         controller = HitlController(self.config, **kwargs)

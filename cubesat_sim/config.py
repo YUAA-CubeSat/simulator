@@ -58,6 +58,10 @@ def load_config(path):
         c["hitl"]["timeout_s"] = float(c["hitl"]["timeout_s"])
     if s["mode"] not in ("sitl", "hitl") or s["clock"] not in ("simulated", "realtime"):
         raise ValueError("simulation.mode or clock is invalid")
+    interface = c.get(s["mode"], {})
+    exchange = interface.get("exchange", "autonomous" if s["mode"] == "hitl" else "lockstep")
+    if exchange == "autonomous" and s["clock"] != "realtime":
+        raise ValueError("autonomous exchange requires a realtime clock")
     if s["mode"] == "hitl" and s["clock"] != "realtime":
         raise ValueError("HITL requires a realtime clock")
     for key in ("duration_s", "step_s", "magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "field_period_s", "telemetry_period_s"):

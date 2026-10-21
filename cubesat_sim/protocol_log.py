@@ -7,6 +7,11 @@ def format_message(kind, values):
     def vector(name, components, scale, unit):
         return f"{name}=[" + ', '.join(f'{x / scale:.6f}' for x in components) + f"] {unit}"
 
+    if kind == wire.U:
+        command = format_message(wire.A, values[:10]).replace('A tick=', 'U sequence=', 1)
+        local, token, host, anchor, valid = values[10:]
+        return (command + f" local_time={local / 1000:.3f} s sync_token={token} "
+                f"sync_host={host / 1000:.3f} s sync_local={anchor / 1000:.3f} s sync_valid={valid}")
     if kind == wire.A:
         tick, mx, my, mz, boom, epoch, valid, wx, wy, wz = values
         return (f"A tick={tick} " + vector('m', (mx, my, mz), 1e6, 'A*m^2')

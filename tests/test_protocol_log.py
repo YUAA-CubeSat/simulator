@@ -27,6 +27,14 @@ class ProtocolLogTests(unittest.TestCase):
                 ProtocolRxLogger(lines.append)(wire.encode(kind, values))
                 self.assertEqual(lines, ['USB RX: ' + expected])
 
+    def test_autonomous_sync_metadata(self):
+        lines = []
+        ProtocolRxLogger(lines.append)(wire.encode(wire.U,
+            [5, 0, 0, 0, 0, 1010, 0, 0, 0, 0, 1010, 7, 20, 1000, 1]))
+        self.assertIn('U sequence=5', lines[0])
+        self.assertIn('local_time=1.010 s sync_token=7 sync_host=0.020 s '
+                      'sync_local=1.000 s sync_valid=1', lines[0])
+
     def test_fragmented_and_batched_frames(self):
         lines = []
         log = ProtocolRxLogger(lines.append)

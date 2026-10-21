@@ -189,7 +189,7 @@ class SimulatorTests(unittest.TestCase):
 
             thread = threading.Thread(target=board)
             thread.start()
-            controller = HitlController({"port": os.ttyname(slave), "baudrate": 115200, "timeout_s": 1},
+            controller = HitlController({"port": os.ttyname(slave), "baudrate": 115200, "timeout_s": 1, "exchange": "lockstep"},
                                         on_receive=received.append)
             controller.magnetometers(1.0, [1e-5, 0, -1e-5], [0, 2e-5, 0])
             controller.accelerometers(1.0, [0.001, -0.0005, 0.00025], [-0.0004, 0.0009, -0.0001])

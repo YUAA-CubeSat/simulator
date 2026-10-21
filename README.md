@@ -108,7 +108,7 @@ hitl:
 
 Run `python -m cubesat_sim config.yaml` using your configuration's filename.
 Close any serial monitor holding that COM port before starting. The same
-`timeout_s` bounds each outbound protocol line and each actuator reply,
+`timeout_s` bounds each outbound write and fresh actuator stream silence (or each lockstep reply),
 including replies arriving in fragments. A disconnect ends the run with an
 I/O error. Windows HITL does not use the SITL command or its build tools;
 SITL subprocess transport remains Unix-only.
@@ -277,7 +277,7 @@ The simulator starts one process per run, sends sensor and control messages to i
 
 `sitl.startup_delay_s` gives the process a wall-clock boot grace period before any sensor or control messages are sent. Set it to the platform’s boot time plus a margin; the example configuration allows five seconds. It must be finite and nonnegative and defaults to zero when omitted. Simulation time and realtime pacing start after this delay. A process that exits during startup stops the run immediately. This is a fixed delay, not a readiness handshake; stdout must remain protocol-only during boot as well.
 
-Reserve stdout for actuator replies, flush each reply immediately, and send diagnostics to stderr (inherited by the simulator). `sitl.timeout_s` is a positive wall-clock deadline for each write and actuator response after startup, including during simulated-clock runs. A closed pipe, missing reply, or invalid reply stops the simulation. On completion or failure the simulator closes the process's stdin, waits briefly for exit, then terminates or kills it if needed and reaps it.
+Reserve stdout for actuator replies, flush each reply immediately, and send diagnostics to stderr (inherited by the simulator). `sitl.timeout_s` is a positive wall-clock deadline for each write and lockstep actuator response after startup, or a stream freshness watchdog with autonomous exchange. A closed pipe, missing reply, or invalid reply stops the simulation. On completion or failure the simulator closes the process's stdin, waits briefly for exit, then terminates or kills it if needed and reaps it.
 
 Existing shared-library configurations must replace `sitl.library` and the symbol settings with `sitl.command` and `sitl.timeout_s`. C and Rust controllers should now build as executables with a message loop; no shared library or C ABI is required.
 
@@ -301,17 +301,17 @@ and bounded hexadecimal preview rather than misleading decoded values. Incomplet
 frames wait for their delimiter; timeouts still report the partial-reply byte count.
 Logging does not alter protocol validation or the binary wire format. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
-`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `gyroscope_period_s`, `sun_period_s`, and `control_period_s` independently schedule the five ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, gyroscope, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
+`step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `gyroscope_period_s`, `sun_period_s`, and `control_period_s` independently schedule the five ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, gyroscope, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s`, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
 For an OBC that is booting or restarted by the serial adapter, set
 `hitl.startup_delay_s: 5.0` (or the measured boot time plus margin). HITL waits
 that long after opening the port, then clears buffered startup output before
 sending sensor/control packets. This is separate from `hitl.timeout_s`, the
-per-exchange deadline; it is not a readiness handshake. The default delay is zero.
+stream freshness deadline; it is not a readiness handshake. The default delay is zero.
 
 For YUAA development-board HITL, use `-DSIM_TARGET=HITL` and select
 `-DSIM_CLOCK=REALTIME` for RTOS receipt timestamps, or `SIMULATED` for host
-sensor timestamps. Both now use matching-tick request/reply. Choose
+sensor timestamps. Use `hitl.exchange: autonomous` for REALTIME or `lockstep` for SIMULATED. Choose
 `-DSIM_TRANSPORT=USB` for USB CDC or `UART` for COM1/USART3; match the UART
 baud configured in `Core/Src/main.c` (currently 115200). USB CDC throughput is
 not determined by the configured UART baud rate.
@@ -320,16 +320,37 @@ For the production OBC, select USB-C FTDI/UART5 and build with
 `YUAA_ADCS_DEVELOPMENT=ON`, `YUAA_ADCS_SIM_REALTIME=ON`, and
 `YUAA_ADCS_UART_BAUDRATE=921600`. Match `hitl.baudrate: 921600`.
 The VS Code realtime build task includes these settings. Physical actuator
-build switches remain independent. A timeout means a complete binary A reply
-did not arrive; confirm matching firmware/protocol versions, baud and port.
+build switches remain independent. An autonomous timeout means no fresh synchronized U command arrived within `timeout_s`; confirm matching firmware/protocol versions, baud and port.
 
 ## SITL/HITL binary protocol
 
 Both transports use [ADCS binary protocol v1](PROTOCOL.md): 3-bit message IDs,
 quantized integer values, COBS framing and CRC16. Rebuild the C example and both
-firmwares; ASCII replies are no longer accepted. The simulator batches due sensor
-packets and the control request into one write, then waits for the matching reply.
+firmwares; ASCII replies are no longer accepted. Real-time HITL defaults to autonomous U output: firmware runs independently, and
+the simulator applies the newest fresh command without a per-step reply wait.
+T is sent once per second for timestamp alignment. Simulated-clock/native SITL
+retains matching T/A lockstep.
 The specification includes exact layouts, units, ranges and error handling.
+
+For the updated OBC or YUAA real-time firmware:
+
+```yaml
+hitl:
+  exchange: autonomous
+  sync_period_s: 1.0
+  timeout_s: 0.15  # maximum age/silence of fresh synchronized commands
+```
+
+Keep your existing port and baud settings. Reflash the updated firmware and update
+this simulator together. U includes a sequence counter, RTOS timestamp and echoed
+T anchor; the host rejects old-session and stale buffered output. Lost occasional
+T packets do not stop control. Before the first synchronized command, output is
+zero. The timeout remains a stream watchdog; it no longer imposes a round-trip
+deadline on every control step. Corrupt frames are counted and skipped until a
+valid delimiter/frame; a sustained loss of fresh output still stops the run.
+For Renode with REALTIME firmware, set the same options under `sitl`; native
+firmware and the C example require `sitl.exchange: lockstep` (the SITL default).
+
 
 Sensor readings remain raw in each configured sensor frame. Firmware calibration
 must use the inverse of the simulator's `body_to_sensor` rotation. Accelerometers
@@ -733,11 +754,12 @@ contain no valid estimates. It has no attitude estimator; only attitude truth is
 recorded/plotted. Rates are the absolute fused inertial angular velocity expressed
 in body axes, not the high-pass libration residual.
 
-The binary A telemetry fields are specified in [PROTOCOL.md](PROTOCOL.md).
-Every response contains an estimate validity flag; invalid rates are zero.
-For direct truth/error comparison, use firmware simulated time so sensor epochs
-share the simulator's clock. In RTOS mode the epochs differ; the comparison tool
-does not automatically align them or unwrap uint32 timestamp rollover.
+The binary A/U telemetry fields are specified in [PROTOCOL.md](PROTOCOL.md).
+Every command contains an estimate validity flag; invalid rates are zero.
+Autonomous U reception maps RTOS estimate epochs into simulation time using the
+echoed synchronization anchor, including uint32 rollover. Lockstep simulated time
+already shares the simulator epoch. Autonomous estimates are held with the command
+between updates; the plotting tool scores each sensor epoch only once.
 
 ### Real-time throughput and zero outputs
 
