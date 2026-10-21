@@ -14,6 +14,34 @@ cp config.example.yaml config.yaml
 
 The example executable uses basic B-dot control and keeps the boom retracted. Replace it with your ADCS implementation in any language. The output CSV is written beside the config file.
 
+### Windows HITL
+
+HITL uses `pyserial` on Windows, macOS, and Linux (115200 baud by default,
+8 data bits, no parity, 1 stop bit, no flow control). In your Windows Python
+environment with Basilisk installed, install the dependencies and list ports:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m serial.tools.list_ports
+```
+
+In your existing simulation YAML, set `simulation.mode: hitl` and
+`simulation.clock: realtime`, and update the serial section:
+
+```yaml
+hitl:
+  port: COM3  # replace with the STM32 port shown above (COM10+ also supported)
+  baudrate: 115200
+  timeout_s: 0.15
+```
+
+Run `python -m cubesat_sim config.yaml` using your configuration's filename.
+Close any serial monitor holding that COM port before starting. The same
+`timeout_s` bounds each outbound protocol line and each actuator reply,
+including replies arriving in fragments. A disconnect ends the run with an
+I/O error. Windows HITL does not use the SITL command or its build tools;
+SITL subprocess transport remains Unix-only.
+
 Press **Ctrl+C** to stop a run. The CLI exits without a KeyboardInterrupt traceback
 (exit status 130) and reports the telemetry path. Buffered CSV rows are flushed
 and the file is closed **before** controller cleanup, so a controller shutdown

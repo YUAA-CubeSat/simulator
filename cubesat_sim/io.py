@@ -4,10 +4,10 @@ import math
 import subprocess
 import os
 import select
-import termios
 import time
 
 import numpy as np
+import serial
 
 
 def validate_command(dipole, length):
@@ -27,9 +27,12 @@ class _LineController:
         offset = 0
         while offset < len(data):
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([], [self.write_fd], [], remaining)[1]:
+            if remaining <= 0:
                 raise TimeoutError(f"{self.transport} write timed out")
-            offset += os.write(self.write_fd, data[offset:])
+            written = self._write(data[offset:], remaining)
+            if not written:
+                raise ConnectionError(f"{self.transport} closed during write")
+            offset += written
 
     def magnetometers(self, time_s, *readings):
         time_ms = round(time_s * 1000)
@@ -77,9 +80,9 @@ class _LineController:
                     self.estimate = (epoch / 1000, valid, *(value / 1e6 for value in rates))
                 return validate_command([int(x) / 1e6 for x in fields[2:5]], int(fields[5]) / 1000)
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([self.read_fd], [], [], remaining)[0]:
+            if remaining <= 0:
                 raise TimeoutError(f"{self.transport} actuator command timed out")
-            data = os.read(self.read_fd, 256)
+            data = self._read(remaining)
             if not data:
                 raise ConnectionError(f"{self.transport} closed")
             if self.on_receive is not None:
@@ -122,6 +125,16 @@ class SitlController(_LineController):
             self.close()
             raise
 
+    def _write(self, data, remaining):
+        if not select.select([], [self.write_fd], [], remaining)[1]:
+            raise TimeoutError("SITL write timed out")
+        return os.write(self.write_fd, data)
+
+    def _read(self, remaining):
+        if not select.select([self.read_fd], [], [], remaining)[0]:
+            raise TimeoutError("SITL actuator command timed out")
+        return os.read(self.read_fd, 256)
+
     def close(self):
         # EOF lets cooperative controllers exit; terminate/kill bound cleanup time.
         self.process.stdin.close()
@@ -144,26 +157,43 @@ class HitlController(_LineController):
     def __init__(self, config, on_receive=None):
         self.on_receive = on_receive
         baud = int(config["baudrate"])
-        attr = getattr(termios, f"B{baud}", None)
-        if attr is None:
-            raise ValueError(f"unsupported baudrate: {baud}")
+        if baud <= 0:
+            raise ValueError("HITL baudrate must be positive")
         self.timeout = float(config["timeout_s"])
         if not math.isfinite(self.timeout) or self.timeout <= 0:
-            raise ValueError("HITL timeout_s must be positive")
-        self.fd = os.open(config["port"], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        settings = termios.tcgetattr(self.fd)
-        settings[0] = 0
-        settings[1] = 0
-        settings[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-        settings[3] = 0
-        settings[4] = attr
-        settings[5] = attr
-        settings[6][termios.VMIN] = 0
-        settings[6][termios.VTIME] = 0
-        termios.tcsetattr(self.fd, termios.TCSANOW, settings)
-        termios.tcflush(self.fd, termios.TCIFLUSH)
-        self.read_fd = self.write_fd = self.fd
+            raise ValueError("HITL timeout_s must be positive and finite")
+        self.serial = serial.Serial(
+            port=config["port"], baudrate=baud,
+            bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE, timeout=self.timeout,
+            write_timeout=self.timeout, xonxoff=False, rtscts=False, dsrdtr=False)
+        try:
+            self.serial.reset_input_buffer()
+        except BaseException:
+            self.serial.close()
+            raise
         self.buffer = bytearray()
 
+    def _write(self, data, remaining):
+        try:
+            self.serial.write_timeout = remaining
+            return self.serial.write(data)
+        except serial.SerialTimeoutException as exc:
+            raise TimeoutError("UART write timed out") from exc
+        except serial.SerialException as exc:
+            raise ConnectionError(f"UART write failed: {exc}") from exc
+
+    def _read(self, remaining):
+        try:
+            self.serial.timeout = remaining
+            # Wait for one byte when idle; drain available bytes without waiting
+            # to fill a 256-byte buffer on every short protocol response.
+            data = self.serial.read(max(1, min(256, self.serial.in_waiting)))
+        except serial.SerialException as exc:
+            raise ConnectionError(f"UART read failed: {exc}") from exc
+        if not data:
+            raise TimeoutError("UART actuator command timed out")
+        return data
+
     def close(self):
-        os.close(self.fd)
+        self.serial.close()

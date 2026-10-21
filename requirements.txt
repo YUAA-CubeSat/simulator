@@ -4,3 +4,4 @@ PyYAML
 matplotlib
 Pillow
 tqdm
+pyserial>=3.5,<4
