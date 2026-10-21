@@ -59,6 +59,12 @@ class HitlTests(unittest.TestCase):
         with self.assertRaisesRegex(ConnectionError, 'disconnected'):
             c.step(0, 0, 1)
 
+    def test_timeout_identifies_endpoint_tick_and_partial_response(self):
+        c = self.controller()
+        self.port.read.side_effect = [b'A 42 ', b'']
+        with self.assertRaisesRegex(TimeoutError, r'tick=42, port=COM12, partial_reply_bytes=5'):
+            c.step(42, .42, .01)
+
     def test_write_timeout_disconnect_and_zero_progress(self):
         c = self.controller()
         for failure, expected in [(serial.SerialTimeoutException('slow'), TimeoutError),
@@ -92,12 +98,37 @@ class HitlTests(unittest.TestCase):
             HitlController(self.config)
         self.port.close.assert_called_once()
 
+    def test_startup_delay_precedes_traffic_and_input_flush(self):
+        self.config['startup_delay_s'] = 5
+        events = []
+        self.port.reset_input_buffer.side_effect = lambda: events.append('flush')
+        def boot(delay):
+            self.assertEqual(delay, 5)
+            self.port.write.assert_not_called()
+            events.append('boot')
+        with patch('cubesat_sim.io.time.sleep', side_effect=boot):
+            c = self.controller()
+        self.port.read.return_value = b'A 0 0 0 0 0\n'
+        c.step(0, 0, .01)
+        self.assertEqual(events, ['boot', 'flush'])
+
+    def test_interrupted_boot_closes_port(self):
+        self.config['startup_delay_s'] = 5
+        with patch('cubesat_sim.io.time.sleep', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                HitlController(self.config)
+        self.port.close.assert_called_once()
+        self.port.write.assert_not_called()
+
     def test_invalid_settings_do_not_open_port(self):
         for timeout in [0, -1, float('nan'), float('inf')]:
             with self.assertRaises(ValueError):
                 HitlController(dict(self.config, timeout_s=timeout))
         with self.assertRaises(ValueError):
             HitlController(dict(self.config, baudrate=0))
+        for delay in [-1, float('nan'), float('inf')]:
+            with self.assertRaisesRegex(ValueError, 'startup_delay'):
+                HitlController(dict(self.config, startup_delay_s=delay))
         self.factory.assert_not_called()
 
 

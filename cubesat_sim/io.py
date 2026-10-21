@@ -81,8 +81,11 @@ class _LineController:
                 return validate_command([int(x) / 1e6 for x in fields[2:5]], int(fields[5]) / 1000)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"{self.transport} actuator command timed out")
-            data = self._read(remaining)
+                raise self._actuator_timeout(tick)
+            try:
+                data = self._read(remaining)
+            except TimeoutError as exc:
+                raise self._actuator_timeout(tick) from exc
             if not data:
                 raise ConnectionError(f"{self.transport} closed")
             if self.on_receive is not None:
@@ -90,6 +93,15 @@ class _LineController:
             self.buffer.extend(data)
             if len(self.buffer) > 256:
                 raise ValueError(f"{self.transport} actuator line exceeds 256 bytes")
+
+
+    def _actuator_timeout(self, tick):
+        port = getattr(self, "port_name", None)
+        endpoint = f", port={port}" if port is not None else ""
+        return TimeoutError(
+            f"{self.transport} actuator command timed out "
+            f"(tick={tick}{endpoint}, partial_reply_bytes={len(self.buffer)}, "
+            f"timeout_s={self.timeout:g})")
 
 
 class SitlController(_LineController):
@@ -162,12 +174,20 @@ class HitlController(_LineController):
         self.timeout = float(config["timeout_s"])
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise ValueError("HITL timeout_s must be positive and finite")
+        startup_delay = float(config.get("startup_delay_s", 0))
+        if not math.isfinite(startup_delay) or startup_delay < 0:
+            raise ValueError("HITL startup_delay_s must be nonnegative and finite")
+        self.port_name = config["port"]
         self.serial = serial.Serial(
-            port=config["port"], baudrate=baud,
+            port=self.port_name, baudrate=baud,
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE, timeout=self.timeout,
             write_timeout=self.timeout, xonxoff=False, rtscts=False, dsrdtr=False)
         try:
+            # Opening a serial adapter may reset the board; UART initialization
+            # runs later in the OBC services task. Do not send T during boot.
+            if startup_delay:
+                time.sleep(startup_delay)
             self.serial.reset_input_buffer()
         except BaseException:
             self.serial.close()

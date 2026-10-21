@@ -216,6 +216,22 @@ SITL and HITL display a terminal progress bar with completed steps, elapsed wall
 
 `step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `gyroscope_period_s`, `sun_period_s`, and `control_period_s` independently schedule the five ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, gyroscope, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
+For an OBC that is booting or restarted by the serial adapter, set
+`hitl.startup_delay_s: 5.0` (or the measured boot time plus margin). HITL waits
+that long after opening the port, then clears buffered startup output before
+sending sensor/control packets. This is separate from `hitl.timeout_s`, the
+per-exchange deadline; it is not a readiness handshake. The default delay is zero.
+
+For the production OBC ADCS firmware, select the **USB-C FTDI / UART5** serial
+port at 115200 baud, not the debugger's virtual COM port. On macOS, inspect
+`.venv/bin/python -m serial.tools.list_ports -v`; FTDI adapters commonly appear
+as `/dev/cu.usbserial-*`. Do not infer the correct device solely from its name.
+An `actuator command timed out` error means a complete `A` reply did not arrive;
+check the selected device, that the debugger has resumed the firmware, and that
+`YUAA_ADCS_ENABLED=ON`, `YUAA_ADCS_DEVELOPMENT=ON` and
+`YUAA_ADCS_SIM_REALTIME=ON` were used for an OBC real-time simulation build.
+The same newline-delimited `T`/`A` exchange is required in both clock modes.
+
 ## SITL/HITL line protocol
 
 Both modes use ASCII lines with space separated decimal integers and `\n` termination. SITL uses the child process's stdin/stdout. For HITL, set `simulation.mode: hitl`, `simulation.clock: realtime`, and `hitl.port`; UART uses 8N1. No JSON parser is needed on the MCU.
