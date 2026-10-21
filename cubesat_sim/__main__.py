@@ -14,6 +14,7 @@ from .config import load_config
 from .io import HitlController, SitlController
 from .estimator_log import EstimatorLog
 from .pacing import pace
+from .protocol_log import ProtocolRxLogger
 
 
 def telemetry_row(plant, applied):
@@ -60,7 +61,7 @@ def run(config):
         if output:
             estimator_log = EstimatorLog(output)
         controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
-            config["hitl"], on_receive=(lambda data: tqdm.write(f"USB RX: {data!r}", file=sys.stderr))
+            config["hitl"], on_receive=ProtocolRxLogger(lambda line: tqdm.write(line, file=sys.stderr))
             if config["hitl"].get("log_usb_rx", False) else None
         )
         periods = {key: round(sim[key] / plant.dt) for key in ("magnetometer_period_s", "accelerometer_period_s", "gyroscope_period_s", "sun_period_s", "control_period_s", "telemetry_period_s")}

@@ -137,6 +137,77 @@ They have no effect when CSV output is disabled. A forced termination can lose
 data acquired since the latest checkpoint; smaller intervals reduce that window
 at the cost of more disk I/O and potentially more CSV rows.
 
+### FTDI latency for OBC HITL on Windows 11 / WSL2
+
+For the OBC's USB-C FTDI/UART5 connection, set the FTDI receive latency timer
+to **1 ms**. In the tested setup, 2 ms still allowed lag to accumulate; 1 ms
+resolved the delay. This is a USB buffering setting, separate from baud rate
+and `hitl.timeout_s`. Keep the firmware and simulator at matching 921600 baud
+for the full 10 ms sensor/control exchange.
+
+When the USB device is attached to WSL2 through `usbipd`, change the **Linux
+driver setting inside WSL**, rather than relying on Windows Device Manager's
+COM-port setting. These instructions assume USB forwarding already works.
+See [Microsoft's WSL USB instructions](https://learn.microsoft.com/en-us/windows/wsl/connect-usb)
+for attachment setup.
+
+1. Stop the simulator, leaving the OBC connected and attached to WSL. No
+   firmware rebuild or reflash is required.
+
+2. From the simulator directory in WSL, identify the OBC's FTDI port:
+
+   ```bash
+   .venv/bin/python -m serial.tools.list_ports -v
+   ```
+
+   Select the FTDI adapter, not ST-LINK. The following commands assume
+   `/dev/ttyUSB0`; replace `ttyUSB0` with the device used by `hitl.port`.
+
+3. Check the driver and record the original latency value:
+
+   ```bash
+   ADCS_TTY=ttyUSB0
+   readlink -f "/sys/bus/usb-serial/devices/$ADCS_TTY/driver"
+   cat "/sys/bus/usb-serial/devices/$ADCS_TTY/latency_timer"
+   ```
+
+   The driver path should end in `ftdi_sio`. The timer value is in milliseconds.
+   If the file does not exist, verify the port and driver before continuing;
+   this setting does not apply to native USB CDC devices.
+
+4. Set 1 ms and verify it:
+
+   ```bash
+   printf '1\n' | sudo tee "/sys/bus/usb-serial/devices/$ADCS_TTY/latency_timer"
+   cat "/sys/bus/usb-serial/devices/$ADCS_TTY/latency_timer"
+   ```
+
+   The result should be `1`. If it was already `1`, no change is needed.
+   The [Linux FTDI driver](https://github.com/torvalds/linux/blob/master/drivers/usb/serial/ftdi_sio.c)
+   exposes this writable timer through sysfs.
+
+5. Restart the same simulation, using your actual configuration filename:
+
+   ```bash
+   .venv/bin/python -m cubesat_sim config.blast.yaml
+   ```
+
+   Keep `hitl.log_usb_rx: false` when measuring timing. In a second WSL terminal,
+   confirm that the timer remains at 1 ms while the serial port is open:
+
+   ```bash
+   cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+   ```
+
+   Replace `ttyUSB0` there too if necessary. Check that the speed approaches
+   `1.00x` and lag no longer grows steadily. This fixed the tested setup but
+   does not guarantee that every host can meet the real-time deadlines.
+
+Recheck after unplugging the OBC, reattaching it through `usbipd`, or restarting
+WSL; do not assume the setting persists. Repeat step 4 if it has reverted.
+To undo the change, write the original recorded value with the same `sudo tee`
+command.
+
 ## Orbit and solar production only
 
 Run the independent `orbit_solar` mode and its plotter:
@@ -212,7 +283,23 @@ Existing shared-library configurations must replace `sitl.library` and the symbo
 
 ## Independent timing
 
-SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. Set `hitl.log_usb_rx: true` to also print received USB/UART data above the bar as raw binary byte strings. Each entry is a raw received chunk, so partial replies and non-ASCII bytes remain visible before protocol validation. Progress and USB output go to stderr; CSV telemetry is unchanged.
+SITL and HITL display a terminal progress bar with completed steps, elapsed wall time, ETA, and current/total simulated seconds. Set `hitl.log_usb_rx: true` to print decoded USB/UART messages above the bar.
+The logger assembles fragmented binary frames and emits one line per complete
+message, using the familiar M/C/G/S/B/T/A type letters and scaled physical values.
+For example:
+
+```text
+USB RX: A tick=100 m=[0.100000, 0.000000, -0.100000] A*m^2 boom=0.500 m E1 time=1.000 s valid=1 omega=[0.010000, -0.020000, 0.015000] rad/s
+```
+
+Times/periods are seconds, dipoles are A·m², boom targets are meters, and rates
+are rad/s. The formatter also supports magnetic fields in µT, accelerations in
+m/s², unitless Sun vectors, battery SOC in percent, and battery power in watts.
+Tick numbers, sensor IDs, and validity flags remain integers. RX normally contains
+A replies; enabling logging does not add TX logging. Invalid frames show an error
+and bounded hexadecimal preview rather than misleading decoded values. Incomplete
+frames wait for their delimiter; timeouts still report the partial-reply byte count.
+Logging does not alter protocol validation or the binary wire format. Progress and USB output go to stderr; CSV telemetry is unchanged.
 
 `step_s` is the Basilisk dynamics interval. `magnetometer_period_s`, `accelerometer_period_s`, `gyroscope_period_s`, `sun_period_s`, and `control_period_s` independently schedule the five ADCS calls; the current actuator command is held between control calls. `field_period_s` schedules WMM evaluations, and `telemetry_period_s` controls CSV size for long runs. All periods and `duration_s` must be integer multiples of `step_s`. Callbacks at the same time run in this order: magnetometer, accelerometer, gyroscope, Sun, battery status, control, then propagation. Battery status is sent at `control_period_s` immediately before each control request, including time zero. `clock: simulated` runs without wall clock pacing; `clock: realtime` aligns steps with wall time. HITL requires real time.
 
@@ -660,7 +747,7 @@ invent missed sensor samples when behind. The progress bar reports simulation/wa
 115.2 bytes per 10 ms in each direction. Two magnetometers, two accelerometers, a gyro,
 battery and control request exceed that input budget at typical values. The reply and
 USB/RTOS scheduling add further latency to the sequential exchange. For UART at 100 Hz, increase baud on both the board and simulator (for example,
-921600 if supported), or use USB CDC. Leave raw RX logging disabled.
+921600 if supported), or use USB CDC. Leave RX logging disabled when measuring throughput.
 This is additional transport headroom, not a guarantee that the host and USB path meet deadlines.
 
 The OBC development estimator requires magnetic samples no more than 20 ms apart
