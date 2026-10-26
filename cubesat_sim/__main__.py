@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "cubesat_sim"
+
 import argparse
 import csv
 import os
@@ -30,10 +37,10 @@ def telemetry_row(plant, applied):
             power.nominal_power_W, power.nominal_energy_Wh]
 
 
-def run(config):
+def run(config, on_output_ready=None):
     if config["simulation"]["mode"] == "orbit_solar":
         from .orbit_solar import run as run_orbit_solar
-        return run_orbit_solar(config)
+        return run_orbit_solar(config, on_output_ready=on_output_ready)
     from .physics import Plant, Sensors
 
     plant = Plant(config)
@@ -60,6 +67,11 @@ def run(config):
                              "nominal_power_W", "nominal_energy_Wh"])
         if output:
             estimator_log = EstimatorLog(output)
+        if on_output_ready is not None:
+            if file:
+                file.flush()
+                estimator_log.file.flush()
+            on_output_ready()
         controller = SitlController(config["sitl"]) if sim["mode"] == "sitl" else HitlController(
             config["hitl"], on_receive=ProtocolRxLogger(lambda line: tqdm.write(line, file=sys.stderr))
             if config["hitl"].get("log_usb_rx", False) else None
@@ -72,6 +84,7 @@ def run(config):
         progress = tqdm(total=steps, desc=sim["mode"].upper(), unit="step", dynamic_ncols=True,
                         postfix=f"sim 0/{sim['duration_s']:g} s")
         start = time.monotonic()
+        last_live_flush = start
         for tick in range(steps):
             t = plant.time_s
             if tick % periods["magnetometer_period_s"] == 0:
@@ -98,6 +111,12 @@ def run(config):
             if file and ((tick + 1) % periods["telemetry_period_s"] == 0 or checkpoint):
                 writer.writerow(telemetry_row(plant, applied))
                 last_recorded_time = plant.time_s
+            now = time.monotonic()
+            if file and now - last_live_flush >= 0.5:
+                file.flush()
+                if estimator_log:
+                    estimator_log.file.flush()
+                last_live_flush = now
             if file and checkpoint:
                 estimator_log.flush()
                 file.flush()
@@ -143,12 +162,26 @@ def run(config):
                         controller.close()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="CubeSat SITL/HITL and orbit-only solar simulator")
     parser.add_argument("config", help="YAML configuration file")
-    args = parser.parse_args()
+    parser.add_argument("--live", action="store_true", help="Open the live viewer and wait for its Start simulation button")
+    parser.add_argument("--live-port", type=int, default=8765, help="Live viewer localhost port (0 chooses a free port)")
+    parser.add_argument("--live-max-rows", type=int, default=20000, help="Retained telemetry rows per stream")
+    parser.add_argument("--no-browser", action="store_true", help="Print the viewer URL without opening a browser")
+    args = parser.parse_args(argv)
+    if not 0 <= args.live_port <= 65535 or args.live_max_rows < 3:
+        parser.error("--live-port must be 0–65535 and --live-max-rows must be >= 3")
     try:
-        run(load_config(args.config))
+        config = load_config(args.config)
+        if args.live:
+            if not config["simulation"].get("output_csv"):
+                parser.error("--live requires simulation.output_csv in the configuration")
+            from utilities.live_dashboard import run_simulator_viewer
+            return run_simulator_viewer(config, Path(args.config).resolve(), run,
+                                        port=args.live_port, max_rows=args.live_max_rows,
+                                        open_browser=not args.no_browser)
+        run(config)
     except KeyboardInterrupt:
         print("Simulation stopped (Ctrl+C).", file=sys.stderr)
         return 130

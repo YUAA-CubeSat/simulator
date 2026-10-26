@@ -1,5 +1,12 @@
 """Plot Y-Thomson nadir pointing errors and rotation relative to the orbit frame."""
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 import numpy as np
 
 from utilities.common import load_telemetry, parser, pyplot, run, save_plot
@@ -44,11 +51,11 @@ def pointing_metrics(time, position, attitude, rates):
     return axis_errors, attitude_error, rates - orbit_rate_b, np.linalg.norm(orbit_rate_n, axis=1)
 
 
-def main():
+def main(argv=None, render=None):
     cli = parser(__doc__, "plots/y_thomson_pointing.png")
     cli.add_argument("--start-s", type=float, help="First simulation second to display")
     cli.add_argument("--end-s", type=float, help="Last simulation second to display")
-    args = cli.parse_args()
+    args = cli.parse_args(argv)
     columns = ('x_m', 'y_m', 'z_m', 'sigma_BN_x', 'sigma_BN_y', 'sigma_BN_z',
                'wx_rad_s', 'wy_rad_s', 'wz_rad_s', 'boom_length_m')
     time, data = load_telemetry(args.csv, columns)
@@ -110,7 +117,10 @@ def main():
     fig.suptitle('Y-Thomson pointing: success = all errors and orbit-relative rate near zero\n'
                  f'Final-orbit +Z nadir error: {z_detail.min():.1f}–{z_detail.max():.1f}°; '
                  f'median residual rotation: {np.median(rate_detail):.3f}°/s')
-    save_plot(fig, plt, args)
+    if render is None:
+        save_plot(fig, plt, args)
+    else:
+        save_plot(fig, plt, args, render=render)
     print(f"Displayed window: {time[mask][0]:g}–{time[mask][-1]:g} s; "
           f"median orbital rate {np.degrees(np.median(orbital[mask])):.5f} deg/s")
     print(f"Final sample: nadir error {angles[mask][-1, 2]:.3f} deg; "

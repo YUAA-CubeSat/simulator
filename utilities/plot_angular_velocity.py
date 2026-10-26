@@ -1,5 +1,12 @@
 """Plot angular velocity components and total magnitude in body or world coordinates."""
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 from pathlib import Path
 
 import numpy as np
@@ -31,12 +38,12 @@ def load_rates(path, frame):
     return time, rates
 
 
-def main():
+def main(argv=None, render=None):
     cli = parser(__doc__, "plots/angular_velocity_body.png")
     cli.set_defaults(output=None)
     cli.add_argument("--frame", choices=("body", "world"), default="body",
                      help="Coordinate frame: body (default) or fixed inertial world (ECI)")
-    args = cli.parse_args()
+    args = cli.parse_args(argv)
     if args.output is None:
         args.output = Path(f"plots/angular_velocity_{args.frame}.png")
     time, rates = load_rates(args.csv, args.frame)
@@ -51,7 +58,10 @@ def main():
     axes[-1].set_xlabel("Simulation time (s)")
     frame_label = "body frame" if args.frame == "body" else "world frame / ECI"
     fig.suptitle(f"Angular velocity ({frame_label})")
-    save_plot(fig, plt, args)
+    if render is None:
+        save_plot(fig, plt, args)
+    else:
+        save_plot(fig, plt, args, render=render)
 
 
 if __name__ == "__main__":

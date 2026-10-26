@@ -1,6 +1,6 @@
 simulation:
-  mode: hitl                  # sitl or hitl
-  clock: realtime            # simulated or realtime; hitl requires realtime
+  mode: sitl                  # sitl or hitl
+  clock: simulated            # simulated or realtime; hitl requires realtime
   start_utc: "2026-09-18T00:00:00Z"
   max_realtime_lag_s: 0.5
   duration_s: 21600 # 6 hours # 172800.0         # 48 hours

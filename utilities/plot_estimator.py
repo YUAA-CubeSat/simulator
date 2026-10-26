@@ -1,4 +1,11 @@
 """Compare firmware body angular-rate estimates with truth at the sensor epoch."""
+
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from pathlib import Path
 
 import numpy as np
@@ -23,10 +30,10 @@ def load_comparison(path):
     return time, data[:, :6], epoch, estimates, truth
 
 
-def main():
+def main(argv=None, render=None):
     cli = parser(__doc__, 'plots/estimator.png')
     cli.set_defaults(csv=Path('telemetry_estimator.csv'))
-    args = cli.parse_args()
+    args = cli.parse_args(argv)
     time, state, epoch, estimates, truth = load_comparison(args.csv)
     plt = pyplot(args.show)
     fig, axes = plt.subplots(5, 1, sharex=True, figsize=(11, 12), layout='constrained')
@@ -55,7 +62,10 @@ def main():
         ax.grid(alpha=0.3)
     axes[-1].set_xlabel('Simulation time (s)')
     fig.suptitle('Firmware estimator verification (body-frame rates)')
-    save_plot(fig, plt, args)
+    if render is None:
+        save_plot(fig, plt, args)
+    else:
+        save_plot(fig, plt, args, render=render)
 
 
 if __name__ == '__main__':

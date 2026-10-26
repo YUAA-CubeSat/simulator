@@ -108,7 +108,7 @@ COLUMNS = ("time_s", "x_m", "y_m", "z_m", "vx_m_s", "vy_m_s", "vz_m_s",
            "solar_power_W", "sunlight_fraction", "solar_energy_Wh", "orbit_period_s")
 
 
-def run(config):
+def run(config, on_output_ready=None):
     sim = config["simulation"]
     orbit = KeplerOrbit(config)
     dt = sim["step_s"]
@@ -125,6 +125,10 @@ def run(config):
             file = open(output, "w", newline="", encoding="utf-8")
             writer = csv.writer(file)
             writer.writerow(COLUMNS)
+        if on_output_ready is not None:
+            if file:
+                file.flush()
+            on_output_ready()
         r, v = orbit.state(0)
         power, fraction = solar_sample(config, r, 0)
         energy = 0.0
@@ -134,6 +138,7 @@ def run(config):
             recorded_time = 0.0
         progress = tqdm(total=steps, desc="ORBIT_SOLAR", unit="step", dynamic_ncols=True)
         start = time.monotonic()
+        last_live_flush = start
         for tick in range(1, steps + 1):
             elapsed = tick * dt
             r, v = orbit.state(elapsed)
@@ -151,6 +156,10 @@ def run(config):
             if file and (tick % record_every == 0 or transition or checkpoint or tick == steps):
                 writer.writerow(row)
                 recorded_time = elapsed
+            now = time.monotonic()
+            if file and now - last_live_flush >= 0.5:
+                file.flush()
+                last_live_flush = now
             if file and checkpoint:
                 file.flush()
                 os.fsync(file.fileno())

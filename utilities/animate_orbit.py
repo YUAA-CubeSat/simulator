@@ -1,5 +1,12 @@
 """Animate an orbit, adding attitude, panel illumination, and power when recorded."""
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 import csv
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -80,14 +87,14 @@ def frame_geometry(start, time, data, normals, area_efficiency, solar):
     return sun_direction, axes, panel_normals, panel_power
 
 
-def main():
+def main(argv=None, render=None):
     cli = parser(__doc__, "plots/orbit.gif")
     cli.add_argument("--config", type=Path, default=Path("config.yaml"), help="Config used for this simulation")
     cli.add_argument("--frames", type=int, default=300, help="Maximum animation frames (default: 300)")
     cli.add_argument("--fps", type=int, default=20, help="Playback frames per second (default: 20)")
     cli.add_argument("--start-s", type=float, help="First simulation time to include")
     cli.add_argument("--end-s", type=float, help="Last simulation time to include")
-    args = cli.parse_args()
+    args = cli.parse_args(argv)
     if args.frames < 2 or args.fps < 1:
         cli.error("--frames must be at least 2 and --fps must be positive")
     if args.output.suffix.lower() not in (".gif", ".html"):
@@ -227,6 +234,13 @@ def main():
         stamp = epoch + timedelta(seconds=float(time[row]))
         title.set_text(f"t = {time[row]:.3f} s · {stamp.isoformat()}\n"
                        f"Recorded row {row + 1} · sampled playback ({len(frames)} frames)")
+
+    if render is not None:
+        update(len(frames) - 1)
+        try:
+            return render(fig)
+        finally:
+            plt.close(fig)
 
     animation = FuncAnimation(fig, update, frames=len(frames), interval=1000 / args.fps, blit=False)
     args.output.parent.mkdir(parents=True, exist_ok=True)

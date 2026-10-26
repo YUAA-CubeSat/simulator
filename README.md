@@ -80,7 +80,7 @@ macOS or Linux (a C compiler is required for this example):
 ```sh
 cc -O2 -Wall -Wextra examples/adcs_example.c -o adcs_example
 cp config.example.yaml config.yaml
-.venv/bin/python -m cubesat_sim config.yaml
+.venv/bin/python simulator.py config.yaml
 ```
 
 The example executable uses basic B-dot control and keeps the boom retracted. Replace it with your ADCS implementation in any language. The output CSV is written beside the config file.
@@ -106,7 +106,7 @@ hitl:
   timeout_s: 0.15
 ```
 
-Run `python -m cubesat_sim config.yaml` using your configuration's filename.
+Run `python simulator.py config.yaml` using your configuration's filename.
 Close any serial monitor holding that COM port before starting. The same
 `timeout_s` bounds each outbound write and fresh actuator stream silence (or each lockstep reply),
 including replies arriving in fragments. A disconnect ends the run with an
@@ -189,7 +189,7 @@ for attachment setup.
 5. Restart the same simulation, using your actual configuration filename:
 
    ```bash
-   .venv/bin/python -m cubesat_sim config.blast.yaml
+   .venv/bin/python simulator.py config.blast.yaml
    ```
 
    Keep `hitl.log_usb_rx: false` when measuring timing. In a second WSL terminal,
@@ -213,8 +213,8 @@ command.
 Run the independent `orbit_solar` mode and its plotter:
 
 ```sh
-.venv/bin/python -m cubesat_sim config.orbit_solar.yaml
-.venv/bin/python -m utilities.plot_solar orbit_solar.csv -o plots/solar.png
+.venv/bin/python simulator.py config.orbit_solar.yaml
+.venv/bin/python utilities/plot_solar.py orbit_solar.csv -o plots/solar.png
 ```
 
 This mode propagates a bound Keplerian orbit in the J2000 frame under spherical
@@ -528,12 +528,12 @@ Install the visualization dependencies in the virtual environment:
 Run these utilities from the repository root after a simulation:
 
 ```sh
-.venv/bin/python -m utilities.plot_magnetorquers telemetry.csv
-.venv/bin/python -m utilities.plot_ggb telemetry.csv
-.venv/bin/python -m utilities.plot_battery telemetry.csv
-.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv
-.venv/bin/python -m utilities.plot_y_thomson telemetry.csv
-.venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml
+.venv/bin/python utilities/plot_magnetorquers.py telemetry.csv
+.venv/bin/python utilities/plot_ggb.py telemetry.csv
+.venv/bin/python utilities/plot_battery.py telemetry.csv
+.venv/bin/python utilities/plot_angular_velocity.py telemetry.csv
+.venv/bin/python utilities/plot_y_thomson.py telemetry.csv
+.venv/bin/python utilities/animate_orbit.py telemetry.csv --config config.yaml
 ```
 
 The plots are saved to `plots/magnetorquers.png`, `plots/ggb_extension.png`,
@@ -548,7 +548,7 @@ simulation for older CSVs that lack these columns. The magnitude is unchanged.
 For example:
 
 ```sh
-.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv --frame world
+.venv/bin/python utilities/plot_angular_velocity.py telemetry.csv --frame world
 ```
 
 For **Y-Thomson nadir pointing**, use `plot_y_thomson`, which saves
@@ -589,7 +589,7 @@ Time is displayed in hours for long runs; select acquisition or steady-state
 windows in seconds, for example:
 
 ```sh
-.venv/bin/python -m utilities.plot_y_thomson telemetry.csv --start-s 0 --end-s 600 -o plots/y_thomson_acquisition.png
+.venv/bin/python utilities/plot_y_thomson.py telemetry.csv --start-s 0 --end-s 600 -o plots/y_thomson_acquisition.png
 ```
 
 The battery utility saves `plots/battery.png`, with three panels sharing a time axis:
@@ -650,7 +650,7 @@ Use `--start-s` and `--end-s` to inspect individual rotation cycles instead of
 compressing hours of variation onto one plot, for example:
 
 ```sh
-.venv/bin/python -m utilities.plot_battery telemetry.csv --start-s 2000 --end-s 2200 -o plots/battery_detail.png
+.venv/bin/python utilities/plot_battery.py telemetry.csv --start-s 2000 --end-s 2200 -o plots/battery_detail.png
 ```
 
 Rerun the simulation if an older CSV lacks these columns. Use `-o/--output` to
@@ -703,7 +703,7 @@ three `sigma_BN_*` columns, `solar_power_W`, `battery_power_W`, and
 `sunlight_fraction`, plus `spacecraft.solar_charging` in the config.
 
 ```sh
-.venv/bin/python -m utilities.animate_orbit orbit_solar.csv --config config.orbit_solar.yaml -o plots/orbit_solar.html
+.venv/bin/python utilities/animate_orbit.py orbit_solar.csv --config config.orbit_solar.yaml -o plots/orbit_solar.html
 ```
 
 Use `utilities.plot_solar` for the separate energy-production plots from an
@@ -714,9 +714,9 @@ and `--show` to also open a window. Static plots support PNG, PDF, and SVG outpu
 The animation supports GIF and interactive HTML with playback controls:
 
 ```sh
-.venv/bin/python -m utilities.animate_orbit telemetry.csv --config config.yaml --frames 180 --fps 15 -o plots/orbit.html
-.venv/bin/python -m utilities.animate_orbit telemetry.csv --config software_config.yaml --start-s 900 --end-s 1200 --frames 301 -o plots/eclipse_exit.html
-.venv/bin/python -m utilities.plot_angular_velocity telemetry.csv -o plots/angular_velocity.svg --show
+.venv/bin/python utilities/animate_orbit.py telemetry.csv --config config.yaml --frames 180 --fps 15 -o plots/orbit.html
+.venv/bin/python utilities/animate_orbit.py telemetry.csv --config software_config.yaml --start-s 900 --end-s 1200 --frames 301 -o plots/eclipse_exit.html
+.venv/bin/python utilities/plot_angular_velocity.py telemetry.csv -o plots/angular_velocity.svg --show
 ```
 
 The utilities require NumPy, Matplotlib, and Pillow, plus PyYAML for animation;
@@ -738,7 +738,7 @@ and closed on exit, including Ctrl+C. Full-cadence logging increases disk usage.
 From the simulator directory:
 
 ```sh
-.venv/bin/python -m utilities.plot_estimator telemetry_estimator.csv -o plots/estimator.png
+.venv/bin/python utilities/plot_estimator.py telemetry_estimator.csv -o plots/estimator.png
 ```
 
 Add `--show` to open the plot. It overlays body rates, plots estimate-minus-truth
@@ -778,3 +778,73 @@ estimate and keep magnetic commands zero. Do not increase the control period to 
 around throughput without revisiting estimator timing. Invalid rate telemetry
 is expected during detumbling/deployment: the preserved algorithm computes rates only
 in pointing mode. Zero rate validity alone therefore does not diagnose a sensor failure.
+
+## Live graph dashboard
+
+Launch the simulator with the live viewer enabled:
+
+```sh
+.venv/bin/python simulator.py config.example.yaml --live
+```
+
+The viewer opens at `http://127.0.0.1:8765`. Arrange your graphs, then press
+**Start simulation**. Until that button is pressed, no dynamics or controller
+connection starts and existing telemetry files are untouched. The viewer uses
+`simulation.output_csv` and the configuration you passed; CSV output must be
+enabled. Repeated clicks or reopening the browser do not start a second run.
+Completion and simulation errors appear in the viewer, which stays available for
+inspection afterward. Press **Ctrl+C** in the terminal to stop the simulation
+and close the viewer. Closing a browser tab alone does not stop the process.
+
+All simulator and plotting command-line scripts support direct `.py` execution,
+including from another working directory using an absolute script path:
+
+```sh
+.venv/bin/python simulator.py config.example.yaml
+.venv/bin/python cubesat_sim/__main__.py config.example.yaml --live
+.venv/bin/python utilities/plot_battery.py telemetry.csv
+```
+
+On Windows use `.venv\Scripts\python.exe`. Existing module-style invocations
+remain supported. The viewer uses the existing dependencies and requires no
+frontend build or internet connection.
+
+Drag individual graphs from the searchable library into the workspace (or click
+one to add it). Drag panel headers to reorder, resize at the lower-right corner,
+and remove panels with ×. Arrow buttons also reorder panels without dragging.
+Layouts save automatically in the browser; **Export layout** / **Import layout**
+lets you keep multiple layouts. Pause display freezes updates without stopping
+the simulator. Refresh intervals range from 1 to 10 seconds; rendering time can
+make updates slower with many panels.
+
+The library includes every panel from the plotting utilities: body/world angular
+rates and magnitude; boom extension; all three magnetorquer dipoles; battery
+energy/SoC, interval and sampled power, smoothed charge/discharge; solar energy,
+power/eclipse, energy per orbit and sun cycle; estimator rates, errors and truth
+attitude; Y-Thomson overview and final-orbit panels; and the orbit animation's
+orbit, attitude, recorded power and panel-illumination views. Orbit views show
+the latest recorded state and use the simulator configuration automatically. Estimator panels read
+the sibling `*_estimator.csv`. Solar orbit/cycle panels require `orbit_solar`
+telemetry. Panels lacking required columns show an explanatory message.
+
+The simulator flushes both telemetry streams every 0.5 seconds of wall time,
+when dynamics steps complete, independently of durable checkpoints. Graphs still
+follow the configured telemetry sampling cadence; they cannot show unrecorded
+steps. Existing simulator processes must be restarted to get this flushing
+behavior. Closing the dashboard does not stop a simulation.
+
+To bound memory and rendering cost, the dashboard retains the latest **20,000
+rows per CSV**, reading appended data incrementally. All calculations, including
+energy totals, estimator matching, smoothing and final-orbit analysis, use only
+that retained history. Increase it for longer windows, especially for the
+full-cadence estimator stream:
+
+```sh
+.venv/bin/python simulator.py config.yaml --live --live-max-rows 100000 --live-port 8766 --no-browser
+```
+
+The status shows retained samples, simulation time, and simulation state.
+`--no-browser` prints the URL for you to open manually; Start simulation is
+still required. `--live-port 0` chooses an available localhost port. The
+server binds only to localhost. Use the existing static plot utilities for
+full-recording analysis and animation exports.

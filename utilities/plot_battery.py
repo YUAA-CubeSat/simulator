@@ -1,5 +1,12 @@
 """Plot battery charge (%), stored energy (Wh), and charging/discharging power (W)."""
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 import numpy as np
 
 from utilities.common import load_telemetry, parser, pyplot, run, save_plot
@@ -31,7 +38,7 @@ def smooth_interval_power(time, power, window_s):
     return centers, smoothed
 
 
-def main():
+def main(argv=None, render=None):
     cli = parser(__doc__, "plots/battery.png")
     cli.add_argument("--power-mode", choices=("interval", "sampled"), default="interval",
                      help="interval: energy-derived mean between CSV rows (default); sampled: last dynamics-step power")
@@ -39,7 +46,7 @@ def main():
     cli.add_argument("--end-s", type=float, help="Last simulation time to display")
     cli.add_argument("--smooth-window-s", type=float, default=300,
                      help="Centered time-weighted smoothing window in seconds (default: 300)")
-    args = cli.parse_args()
+    args = cli.parse_args(argv)
     if not np.isfinite(args.smooth_window_s) or args.smooth_window_s <= 0:
         raise ValueError("--smooth-window-s must be positive and finite")
     columns = ("battery_soc", "battery_energy_Wh")
@@ -118,7 +125,10 @@ def main():
     for ax in axes:
         ax.grid(alpha=0.3)
     fig.suptitle("Battery level and power")
-    save_plot(fig, plt, args)
+    if render is None:
+        save_plot(fig, plt, args)
+    else:
+        save_plot(fig, plt, args, render=render)
 
 
 if __name__ == "__main__":

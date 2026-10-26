@@ -1,5 +1,12 @@
 """Plot orbit-only solar telemetry, using integrated energy for all totals."""
 
+# Allow direct execution from any working directory as well as package execution.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
 import numpy as np
 
 from utilities.common import load_telemetry, parser, pyplot, run, save_plot
@@ -31,8 +38,8 @@ def analyze(time, data):
     return (orbit_edges, orbit_energy, orbit_complete), (cycle_edges, cycle_energy, cycle_complete)
 
 
-def main():
-    args = parser("Plot solar production, energy per orbit and sunrise-to-sunrise cycle", "plots/solar.png").parse_args()
+def main(argv=None, render=None):
+    args = parser("Plot solar production, energy per orbit and sunrise-to-sunrise cycle", "plots/solar.png").parse_args(argv)
     time, data = load_telemetry(args.csv, ("solar_power_W", "sunlight_fraction", "solar_energy_Wh", "orbit_period_s"))
     orbits, cycles = analyze(time, data)
     energy = data[-1, 2] - data[0, 2]
@@ -63,7 +70,10 @@ def main():
     for ax in axes.flat:
         ax.grid(alpha=0.3)
     fig.suptitle("Attitude-free solar production · available bus energy before storage or loads")
-    save_plot(fig, plt, args)
+    if render is None:
+        save_plot(fig, plt, args)
+    else:
+        save_plot(fig, plt, args, render=render)
 
 
 if __name__ == "__main__":

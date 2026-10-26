@@ -46,7 +46,12 @@ def pyplot(show):
     return plt
 
 
-def save_plot(fig, plt, args):
+def save_plot(fig, plt, args, render=None):
+    if render is not None:
+        try:
+            return render(fig)
+        finally:
+            plt.close(fig)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.output, dpi=160)
     print(f"Saved {args.output}")
