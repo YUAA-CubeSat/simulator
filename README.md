@@ -372,7 +372,7 @@ OBC's 10 ms full sensor exchange; it still exceeds the 115200-baud budget.
 - The boom is a massless rod with a point tip mass. Extension changes Basilisk's spacecraft inertia and the gravity gradient torque. The inertia rate adds a reaction torque. `tip_mass_kg`, `axis_body`, initial and allowed lengths, and maximum extension speed are in the config. Flexible boom dynamics are not modeled.
 - The initial orbit state uses Earth centered inertial coordinates with J2000 mean equator/equinox axes. The template's orbit is near circular LEO. Central Earth gravity is used for propagation.
 
-`simulation.seed` makes sensor noise repeatable. Accelerometers and the gyroscope each use a separate random stream, so changing either update rate does not change the other sensors’ noise sequences. CSV telemetry includes position, true body-frame angular rate (the `wx_rad_s`, `wy_rad_s`, and `wz_rad_s` columns, not noisy gyroscope readings), applied dipoles, boom length, the three diagonal moments of inertia, the WMM field, and battery/power values described below. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
+`simulation.seed` makes sensor noise repeatable. Accelerometers and each gyroscope use separate random streams, so changing either update rate does not change the other sensors’ noise sequences. CSV telemetry includes position, true body-frame angular rate (the `wx_rad_s`, `wy_rad_s`, and `wz_rad_s` columns, not noisy gyroscope readings), applied dipoles, boom length, the three diagonal moments of inertia, the WMM field, and battery/power values described below. The default six-hour simulated-clock run has 108,000 dynamics steps and writes telemetry once per second.
 
 ## Battery and solar power
 
@@ -766,7 +766,7 @@ between updates; the plotting tool scores each sensor epoch only once.
 Real-time pacing sleeps only when the loop is ahead; it does not skip physics steps or
 invent missed sensor samples when behind. The progress bar reports simulation/wall-time
 `speed` (1.00x is real time) and accumulated `lag`. At 115200 baud, 8N1 permits only
-115.2 bytes per 10 ms in each direction. Two magnetometers, two accelerometers, a gyro,
+115.2 bytes per 10 ms in each direction. Two magnetometers, two accelerometers, two gyros,
 battery and control request exceed that input budget at typical values. The reply and
 USB/RTOS scheduling add further latency to the sequential exchange. For UART at 100 Hz, increase baud on both the board and simulator (for example,
 921600 if supported), or use USB CDC. Leave RX logging disabled when measuring throughput.
@@ -848,3 +848,19 @@ The status shows retained samples, simulation time, and simulation state.
 still required. `--live-port 0` chooses an available localhost port. The
 server binds only to localhost. Use the existing static plot utilities for
 full-recording analysis and animation exports.
+
+### Two BNO055 gyroscopes in sensor-hitl
+
+`config.example.yaml` and `config.blast.yaml` use `sensors.gyroscopes`, a list of
+two mappings containing `body_to_sensor`, `bias_rad_s`, and `noise_std_rad_s`.
+Both are sampled at `simulation.gyroscope_period_s`, with independent seeded noise.
+The controller receives `gyroscopes(time_s, *readings)` and emits indexed G frames
+for IDs 0/1. The older singular `sensors.gyroscope` mapping is accepted as one
+sensor for existing configuration files. See PROTOCOL.md for the wire extension.
+
+In sensor-hitl, M/C/G ID 0 feeds BNO055 0x28 and ID 1 feeds BNO055 0x29. Align
+all three sensor-family transforms for each device. The emulator exposes raw
+sensors in AMG/GYRONLY mode; it does not calculate BNO055 fusion outputs.
+The C example passes both IDs to its gyroscope callback. Current OBC/YUAA control
+algorithms use gyro 0 only. Rebuild these endpoints to accept the indexed G layout
+before running the updated configs.

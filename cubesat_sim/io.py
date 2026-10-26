@@ -149,7 +149,13 @@ class _BinaryController:
             self._sensor(wire.C, [wire.quantize(time_s, 1000), sensor_id,
                                  *(wire.quantize(x, 1e6) for x in reading)])
 
+    def gyroscopes(self, time_s, *readings):
+        for sensor_id, reading in enumerate(readings):
+            self._sensor(wire.G, [wire.quantize(time_s, 1000), sensor_id,
+                                  *(wire.quantize(x, 1e6) for x in reading)])
+
     def gyroscope(self, time_s, reading):
+        """Legacy single-gyro callback, retained for existing clients."""
         self._sensor(wire.G, [wire.quantize(time_s, 1000), *(wire.quantize(x, 1e6) for x in reading)])
 
     def sun(self, time_s, vector):

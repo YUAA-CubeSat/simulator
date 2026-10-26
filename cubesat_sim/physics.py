@@ -121,16 +121,19 @@ class Sensors:
         # Separate streams keep sensor noise independent of the added sensor cadences.
         self.accel_rng = np.random.default_rng(np.random.SeedSequence(
             config["simulation"]["seed"], spawn_key=(1,)))
-        self.gyro_rng = np.random.default_rng(np.random.SeedSequence(
-            config["simulation"]["seed"], spawn_key=(2,)))
+        self.gyro_rngs = [np.random.default_rng(np.random.SeedSequence(
+            config["simulation"]["seed"], spawn_key=(2, i)))
+            for i in range(len(config["sensors"]["gyroscopes"]))]
 
-    def gyroscope(self, plant):
-        """Angular velocity relative to inertial space, in the sensor frame, rad/s."""
-        gyro = self.config["sensors"]["gyroscope"]
+    def gyroscopes(self, plant):
+        """Independent XYZ rates for each sensor, in its sensor frame, rad/s."""
         rate_body = plant.state()["angular_rate_rad_s"]
-        reading = np.asarray(gyro["body_to_sensor"]) @ rate_body + np.asarray(gyro["bias_rad_s"])
-        reading += self.gyro_rng.normal(0, gyro["noise_std_rad_s"], 3)
-        return reading.tolist()
+        readings = []
+        for gyro, rng in zip(self.config["sensors"]["gyroscopes"], self.gyro_rngs):
+            reading = np.asarray(gyro["body_to_sensor"]) @ rate_body + np.asarray(gyro["bias_rad_s"])
+            reading += rng.normal(0, gyro["noise_std_rad_s"], 3)
+            readings.append(reading.tolist())
+        return readings
 
     def accelerometers(self, plant):
         force_body = plant.specific_force_body()

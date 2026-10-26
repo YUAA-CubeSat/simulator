@@ -157,19 +157,23 @@ def load_config(path):
         accel["bias_m_s2"] = _vector(accel["bias_m_s2"], f"accelerometer {i} bias_m_s2").tolist()
         if not math.isfinite(accel["noise_std_m_s2"]) or accel["noise_std_m_s2"] < 0:
             raise ValueError("accelerometer noise must be nonnegative and finite")
-    gyro = sensors["gyroscope"]
-    if not isinstance(gyro, dict):
-        raise ValueError("sensors.gyroscope must be a single sensor mapping")
-    gyro["noise_std_rad_s"] = float(gyro["noise_std_rad_s"])
-    dcm = np.asarray(gyro["body_to_sensor"], dtype=float)
-    if (dcm.shape != (3, 3) or not np.all(np.isfinite(dcm))
-            or not np.allclose(dcm @ dcm.T, np.eye(3), atol=1e-5)
-            or np.linalg.det(dcm) < 0.999):
-        raise ValueError("gyroscope body_to_sensor must be a proper rotation")
-    gyro["body_to_sensor"] = dcm.tolist()
-    gyro["bias_rad_s"] = _vector(gyro["bias_rad_s"], "gyroscope bias_rad_s").tolist()
-    if not math.isfinite(gyro["noise_std_rad_s"]) or gyro["noise_std_rad_s"] < 0:
-        raise ValueError("gyroscope noise must be nonnegative and finite")
+    # Accept old single-gyro files, but normalize all callers to a sensor list.
+    if "gyroscopes" not in sensors and "gyroscope" in sensors:
+        sensors["gyroscopes"] = [sensors.pop("gyroscope")]
+    gyros = sensors.get("gyroscopes")
+    if not isinstance(gyros, list) or not 1 <= len(gyros) <= 2 or any(not isinstance(g, dict) for g in gyros):
+        raise ValueError("sensors.gyroscopes must contain one or two sensor mappings")
+    for gyro in gyros:
+        gyro["noise_std_rad_s"] = float(gyro["noise_std_rad_s"])
+        dcm = np.asarray(gyro["body_to_sensor"], dtype=float)
+        if (dcm.shape != (3, 3) or not np.all(np.isfinite(dcm))
+                or not np.allclose(dcm @ dcm.T, np.eye(3), atol=1e-5)
+                or np.linalg.det(dcm) < 0.999):
+            raise ValueError("gyroscope body_to_sensor must be a proper rotation")
+        gyro["body_to_sensor"] = dcm.tolist()
+        gyro["bias_rad_s"] = _vector(gyro["bias_rad_s"], "gyroscope bias_rad_s").tolist()
+        if not math.isfinite(gyro["noise_std_rad_s"]) or gyro["noise_std_rad_s"] < 0:
+            raise ValueError("gyroscope noise must be nonnegative and finite")
     sun = sensors["sun_sensor"]
     sun["boresight_body"] = _vector(sun["boresight_body"], "sun_sensor.boresight_body", True).tolist()
     if not 0 < sun["half_angle_deg"] <= 180 or not math.isfinite(sun["noise_std_rad"]) or sun["noise_std_rad"] < 0:

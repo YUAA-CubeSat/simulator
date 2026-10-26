@@ -9,7 +9,7 @@ for numeric identifiers, **not transmitted ASCII characters**.
 
 A frame is `COBS(header || payload || crc16_le) || 0x00`. COBS removes all zero
 bytes from the encoded body; zero is the frame delimiter. The one-byte header
-contains `version=1` in bits 7–3 and the **3-bit type** in bits 2–0. Type 7 carries autonomous output. Payload sizes are fixed by type; no length field is needed.
+contains `version=1` in bits 7–3 and the **3-bit type** in bits 2–0. Type 7 carries autonomous output. Payload sizes are fixed by type except for the legacy/indexed G variants; no length field is needed.
 
 CRC is CRC-16/CCITT-FALSE: polynomial `0x1021`, initial `0xffff`, no reflection,
 no final XOR. It covers the unencoded header and payload; its two bytes are
@@ -35,7 +35,8 @@ and remain in the sensor frame; calibration/fusion still belongs to firmware.
 | --- | --- | --- | ---: | ---: |
 | M | 0 | time_ms:u32, sensor_id:u8, magnetic_xyz:3×i24 | 14 | 19 |
 | C | 1 | time_ms:u32, sensor_id:u8, acceleration_xyz:3×i32 | 17 | 22 |
-| G | 2 | time_ms:u32, angular_rate_xyz:3×i24 | 13 | 18 |
+| G | 2 | time_ms:u32, sensor_id:u8, angular_rate_xyz:3×i24 | 14 | 19 |
+| G (legacy) | 2 | time_ms:u32, angular_rate_xyz:3×i24 | 13 | 18 |
 | S | 3 | time_ms:u32, valid:u8, sun_xyz:3×i16 | 11 | 16 |
 | B | 4 | time_ms:u32, soc_permille:u16, power_mW:i32 | 10 | 15 |
 | T | 5 | tick:u32, time_ms:u32, period_ms:u16 | 10 | 15 |
@@ -150,3 +151,16 @@ A T request with tick=1, time_ms=1000, period_ms=10 is exactly these bytes:
 
 The unencoded header is `0x0d` (version 1, type 5). The final zero is the
 frame delimiter, not part of the CRC input.
+
+## Indexed gyroscopes
+
+The simulator sends one G frame per configured gyroscope, with IDs 0 and 1.
+The indexed form adds one byte after time_ms; the decoded frame length distinguishes
+it from the legacy form, which means sensor 0. Framing/version/CRC and all other
+message layouts are unchanged. Older receivers that only accept 13-byte G payloads
+must be updated before using the new simulator.
+
+The sensor-hitl BNO055 emulator routes IDs 0/1 to 0x28/0x29. Existing OBC/YUAA
+controllers have a single gyro cache and intentionally accept only ID 0; secondary
+frames do not change primary data or freshness. The C Wire_Encode helper continues
+to emit legacy G frames; Wire_Feed accepts both lengths.

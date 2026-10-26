@@ -23,6 +23,7 @@ FIELDS = (
     (U32, I24, I24, I24, U16, U32, U8, I24, I24, I24),
     (U32, I24, I24, I24, U16, U32, U8, I24, I24, I24, U32, U32, U32, U32, U8),
 )
+INDEXED_G_FIELDS = (U32, U8, I24, I24, I24)
 MAX_FRAME = 64
 
 
@@ -35,11 +36,14 @@ def quantize(value, scale):
 
 
 def encode(kind, values):
-    if not 0 <= kind < len(FIELDS) or len(values) != len(FIELDS[kind]):
+    if not 0 <= kind < len(FIELDS):
+        raise ValueError("invalid message type")
+    fields = INDEXED_G_FIELDS if kind == G and len(values) == 5 else FIELDS[kind]
+    if len(values) != len(fields):
         raise ValueError("invalid message type or field count")
     raw = bytearray([8 | kind])
     try:
-        for value, (width, signed) in zip(values, FIELDS[kind]):
+        for value, (width, signed) in zip(values, fields):
             raw.extend(int(value).to_bytes(width, 'little', signed=signed))
     except OverflowError as exc:
         raise ValueError("protocol value outside representable range") from exc
@@ -79,13 +83,14 @@ def decode(packet):
     if len(raw) < 3 or raw[0] >> 3 != 1 or raw[0] & 7 >= len(FIELDS):
         raise ValueError("unsupported protocol version/type")
     kind = raw[0] & 7
-    if len(raw) != 3 + sum(width for width, _ in FIELDS[kind]):
+    fields = INDEXED_G_FIELDS if kind == G and len(raw) == 17 else FIELDS[kind]
+    if len(raw) != 3 + sum(width for width, _ in fields):
         raise ValueError("invalid payload length")
     if int.from_bytes(raw[-2:], 'little') != binascii.crc_hqx(raw[:-2], 0xffff):
         raise ValueError("frame CRC mismatch")
     values = []
     offset = 1
-    for width, signed in FIELDS[kind]:
+    for width, signed in fields:
         values.append(int.from_bytes(raw[offset:offset + width], 'little', signed=signed))
         offset += width
     return kind, values

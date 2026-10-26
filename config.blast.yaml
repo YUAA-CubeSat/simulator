@@ -67,7 +67,7 @@ environment:
   wmm_coefficients: ./data/WMM2025.COF
 
 sensors:
-  # Both sensor pairs are body-aligned to match firmware identity calibration.
+  # All three sensor pairs are body-aligned to match firmware identity calibration.
   magnetometers:
     - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
       bias_T: [0.0, 0.0, 0.0]
@@ -83,11 +83,14 @@ sensors:
     - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
       bias_m_s2: [0.0, 0.0, 0.0]
       noise_std_m_s2: 1.0e-3
-  gyroscope:
-    # One three-axis angular-rate sensor; illustrative noise per sample per axis.
-    body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-    bias_rad_s: [0.0, 0.0, 0.0]
-    noise_std_rad_s: 1.0e-4
+  gyroscopes:
+    # IDs 0/1 map to BNO055 0x28/0x29; align with each device's accel/mag frame.
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      bias_rad_s: [0.0, 0.0, 0.0]
+      noise_std_rad_s: 1.0e-4
+    - body_to_sensor: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      bias_rad_s: [0.0, 0.0, 0.0]
+      noise_std_rad_s: 1.0e-4
   sun_sensor:
     boresight_body: [1.0, 0.0, 0.0]
     half_angle_deg: 80.0

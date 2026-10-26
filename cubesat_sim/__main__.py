@@ -92,7 +92,7 @@ def run(config, on_output_ready=None):
             if tick % periods["accelerometer_period_s"] == 0:
                 controller.accelerometers(t, *sensors.accelerometers(plant))
             if tick % periods["gyroscope_period_s"] == 0:
-                controller.gyroscope(t, sensors.gyroscope(plant))
+                controller.gyroscopes(t, *sensors.gyroscopes(plant))
             if tick % periods["sun_period_s"] == 0:
                 controller.sun(t, sensors.sun(plant))
             estimate = None

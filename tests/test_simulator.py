@@ -130,8 +130,8 @@ class SimulatorTests(unittest.TestCase):
                 test.assertAlmostEqual(time_s, calls["accel"] * 0.6)
                 calls["accel"] += 1
 
-            def gyroscope(self, time_s, reading):
-                test.assertEqual(len(reading), 3)
+            def gyroscopes(self, time_s, *readings):
+                test.assertEqual(len(readings), 2)
                 test.assertAlmostEqual(time_s, calls["gyro"] * 0.8)
                 calls["gyro"] += 1
 

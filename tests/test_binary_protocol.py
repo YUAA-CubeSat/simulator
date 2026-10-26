@@ -82,6 +82,7 @@ int main(void) {
     WireDecoder d={0}; WireFrame f; AdcsSensors sensors={0}; AdcsStep step; int byte;
     while((byte=getchar())!=EOF) if(Wire_Feed(&d,(uint8_t)byte,&f)==1) {
         SimParseResult result=Sim_ParseFrame(&f,&sensors,&step);
+        if(f.type==WIRE_G && f.length==14 && f.payload[4]==1) assert(result==SIM_IGNORED);
         if(result==SIM_STEP) {
             assert(step.sensors.acceleration[1][0]==-123456789);
             assert(step.sensors.sun[2]==32767 && step.sensors.sun_valid);
@@ -111,7 +112,11 @@ int main(void) {
                   [obc/'core/services/adcs_io/inc', obc/'core/lib/adcs_common/inc', obc/'config/adcs'])]
         frames=b''.join(w.encode(kind,values) for kind,values in [
             (w.M,[100,0,-200000,0,200000]), (w.C,[100,1,-123456789,0,0]),
-            (w.G,[101,10000,-20000,30000]), (w.S,[101,1,0,0,32767]),
+            (w.G,[100,999,999,999]), # legacy still accepted
+            (w.G,[101,0,10000,-20000,30000]),
+            (w.G,[102,1,777,888,999]), # secondary cannot overwrite primary/time
+            (w.G,[103,255,777,888,999]), # invalid ID
+            (w.S,[101,1,0,0,32767]),
             (w.B,[101,800,-750]),
             # Semantically invalid but CRC-valid fields must not overwrite state.
             (w.M,[101,255,1,2,3]), (w.B,[101,1001,0]), (w.S,[101,2,0,0,0]),
@@ -127,6 +132,18 @@ int main(void) {
                 expected=[0xffffffff,-200000,0,200000,3000,101,1,10000,-20000,30000]
                 self.assertEqual(w.decode(a), (w.A,expected))
                 self.assertEqual(w.decode(u), (w.U,expected+[510,7,200,500,1]))
+
+    def test_indexed_gyro_codec_and_rust_vectors(self):
+        for sensor_id in (0, 1):
+            values = [123, sensor_id, -8388608, 8388607, -1]
+            frame = w.encode(w.G, values)
+            self.assertEqual(len(frame), 19)
+            self.assertEqual(w.decode(frame[:-1]), (w.G, values))
+            vectors = ROOT.parent / 'sensor-hitl/tests/wire-vectors.txt'
+            if vectors.exists():
+                line = next(line for line in vectors.read_text().splitlines()
+                            if line.startswith(f'G{sensor_id} '))
+                self.assertEqual(bytes.fromhex(line.split(' ', 1)[1]), frame)
 
     def test_absolute_pacing_and_overrun(self):
         from unittest.mock import patch

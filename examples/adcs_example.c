@@ -42,10 +42,11 @@ void adcs_accelerometer(double time_s, int sensor_id, const double accel_m_s2[3]
     (void)accel_m_s2;
 }
 
-void adcs_gyroscope(double time_s, const double rate_rad_s[3])
+void adcs_gyroscope(double time_s, int sensor_id, const double rate_rad_s[3])
 {
-    /* Hook for rate-aware control; reading is in the gyroscope's sensor frame. */
+    /* Hook for rate-aware control; IDs 0/1 have independent sensor frames. */
     (void)time_s;
+    (void)sensor_id;
     (void)rate_rad_s;
 }
 
@@ -96,8 +97,11 @@ int main(void)
             if(f.type==WIRE_M) adcs_magnetometer(t,p[4],v);
             else adcs_accelerometer(t,p[4],v);
         } else if(f.type==WIRE_G) {
-            for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+4+i*3,3)*1e-6;
-            adcs_gyroscope(t,v);
+            unsigned offset=f.length==14?5:4;
+            unsigned sensor_id=f.length==14?p[4]:0;
+            if(sensor_id>1) continue;
+            for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+offset+i*3,3)*1e-6;
+            adcs_gyroscope(t,(int)sensor_id,v);
         } else if(f.type==WIRE_S) {
             for(unsigned i=0;i<3;++i) v[i]=Wire_Signed(p+5+i*2,2)/32767.0;
             adcs_sun(t,v,p[4]);

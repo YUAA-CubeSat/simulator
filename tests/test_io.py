@@ -77,6 +77,16 @@ print('A 8 0 0 0 0', flush=True)
         controller.close()
         self.assertEqual(controller.process.returncode, 0)
 
+    def test_two_indexed_gyro_frames(self):
+        controller = self.controller("assert input() == 'G 1250 0 10000 -20000 30000'; "
+                                     "assert input() == 'G 1250 1 -40000 50000 -60000'; "
+                                     "assert input() == 'T 0 1250 10'; "
+                                     "print('A 0 0 0 0 0', flush=True)")
+        controller.gyroscopes(1.25, [0.01, -0.02, 0.03], [-0.04, 0.05, -0.06])
+        controller.step(0, 1.25, 0.01)
+        controller.close()
+        self.assertEqual(controller.process.returncode, 0)
+
     def test_estimate_extension_and_legacy_reset(self):
         controller = self.controller("input(); print('A 0 1 2 3 4 E1 125 1 10000 -20000 30000', flush=True); input(); print('A 1 0 0 0 0', flush=True)")
         controller.step(0, 0.2, 0.01)

@@ -61,6 +61,7 @@ static inline int Wire_Feed(WireDecoder *d,uint8_t byte,WireFrame *f) {
     }
     if(k<3 || raw[0]>>3!=WIRE_VERSION) return -1;
     unsigned type=raw[0]&7; size_t length=Wire_Size(type);
+    if(type==WIRE_G && k==17) length=14; /* indexed gyro extension */
     if(!length || k!=length+3 || Wire_Get(raw+k-2,2)!=Wire_Crc(raw,k-2)) return -1;
     f->type=type; f->length=length; memcpy(f->payload,raw+1,length); return 1;
 }
