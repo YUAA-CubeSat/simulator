@@ -1,4 +1,4 @@
-import base64
+import json
 import csv
 import math
 from pathlib import Path
@@ -32,15 +32,17 @@ class LiveDashboardTests(unittest.TestCase):
             path = Path(directory) / 'live.csv'
             path.write_text('time_s,boom_length_m\n0,0\n1,1\n')
             dashboard = Dashboard(path)
-            result = dashboard.render(['boom:0', 'body:0', 'orbit:0'])
-            image = result['plots']['boom:0']['image']
-            self.assertTrue(base64.b64decode(image).startswith(b'\x89PNG'))
+            result = dashboard.snapshot(['boom:0', 'body:0', 'orbit:0'])
+            panel = result['plots']['boom:0']
+            self.assertEqual(panel['data'][0]['x'], [0, 1])
+            self.assertEqual(panel['data'][0]['y'], [0, 1])
+            self.assertNotIn('image', panel)
             self.assertIn('Missing telemetry columns', result['plots']['body:0']['error'])
             self.assertIn('--config', result['plots']['orbit:0']['error'])
-            self.assertEqual(dashboard.render(['boom:0'])['plots']['boom:0']['image'], image)
+            self.assertEqual(dashboard.snapshot(['boom:0'], {'boom:0': panel['version']})['plots'], {})
             with path.open('a') as stream:
                 stream.write('2,0\n')
-            self.assertNotEqual(dashboard.render(['boom:0'])['plots']['boom:0']['image'], image)
+            self.assertEqual(dashboard.snapshot(['boom:0'])['plots']['boom:0']['data'][0]['y'], [0, 1, 0])
 
     def test_all_existing_utility_panels_render(self):
         # Use recorded orbit geometry with full synthetic power/attitude fields.
@@ -65,9 +67,11 @@ class LiveDashboardTests(unittest.TestCase):
                     writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
                     writer.writeheader()
                     writer.writerows(rows)
-            result = Dashboard(path, root / 'config.example.yaml').render([p['id'] for p in CATALOG])
+            result = Dashboard(path, root / 'config.example.yaml').snapshot([p['id'] for p in CATALOG])
             for item, value in result['plots'].items():
-                self.assertIn('image', value, (item, value))
+                self.assertIn('data', value, (item, value))
+                self.assertIn('layout', value)
+                json.dumps(value, allow_nan=False)
 
 
 if __name__ == '__main__':

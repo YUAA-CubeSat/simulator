@@ -5,3 +5,5 @@ matplotlib
 Pillow
 tqdm
 pyserial>=3.5,<4
+aiohttp>=3.12,<4
+plotly>=6,<7

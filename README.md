@@ -806,16 +806,34 @@ including from another working directory using an absolute script path:
 ```
 
 On Windows use `.venv\Scripts\python.exe`. Existing module-style invocations
-remain supported. The viewer uses the existing dependencies and requires no
-frontend build or internet connection.
+remain supported. Install the updated dependencies once:
+
+```sh
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+The viewer uses **Plotly.js** for browser-native interactive charts and **aiohttp
+WebSockets** for numeric telemetry updates. Plotly's JavaScript bundle is served
+locally from the installed Plotly package; no CDN, frontend build, or internet
+connection is needed at runtime. Matplotlib remains available for static exports
+but is not loaded or used by the live viewer.
 
 Drag individual graphs from the searchable library into the workspace (or click
 one to add it). Drag panel headers to reorder, resize at the lower-right corner,
 and remove panels with ×. Arrow buttons also reorder panels without dragging.
 Layouts save automatically in the browser; **Export layout** / **Import layout**
 lets you keep multiple layouts. Pause display freezes updates without stopping
-the simulator. Refresh intervals range from 1 to 10 seconds; rendering time can
-make updates slower with many panels.
+the simulator. Updates default to 250 ms (select 250 ms–2 s). Hover to inspect
+values, drag to zoom, scroll to zoom further, and click legend entries to toggle
+traces. The orbit and attitude views are interactive 3D plots. Zoom, legend state,
+and camera angles persist as new telemetry arrives; **Reset zoom / follow** returns
+to automatic scaling.
+
+The server pushes changed numeric traces over one WebSocket connection. There is
+no image generation or HTTP polling for plots or simulation status. Each browser
+acknowledges an update after plotting it, preventing a slow tab from accumulating
+queued updates. Disconnections reconnect automatically and restore selected plots
+from the retained history; reconnecting never starts another simulation.
 
 The library includes every panel from the plotting utilities: body/world angular
 rates and magnitude; boom extension; all three magnetorquer dipoles; battery
@@ -836,7 +854,12 @@ behavior. Closing the dashboard does not stop a simulation.
 To bound memory and rendering cost, the dashboard retains the latest **20,000
 rows per CSV**, reading appended data incrementally. All calculations, including
 energy totals, estimator matching, smoothing and final-orbit analysis, use only
-that retained history. Increase it for longer windows, especially for the
+that retained history. Calculations run on every retained sample; time-series
+traces above 2,000 points use a display reduction that keeps endpoints and each
+bucket's minimum and maximum. This bounds browser work while retaining spikes;
+use static exports to inspect every individual sample. Orbit paths display up to
+2,000 uniformly selected recorded positions, with the current state always included.
+Increase retained history for longer windows, especially for the
 full-cadence estimator stream:
 
 ```sh

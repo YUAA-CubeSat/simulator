@@ -9,23 +9,23 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
-import base64
+import asyncio
+import socket
+
+import numpy as np
+
+from utilities.live_traces import Traces
 from collections import deque
 import csv
-import importlib
-import io
 import json
 import secrets
 import traceback
 from pathlib import Path
-import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
 import webbrowser
 
-# Axis indices refer to the existing figures; secondary axes stay with their panel.
+# Stable graph IDs preserve layouts from the original viewer.
 FAMILIES = {
     'body': ('plot_angular_velocity', ['--frame', 'body'], ['X rate', 'Y rate', 'Z rate', 'Rate magnitude']),
     'world': ('plot_angular_velocity', ['--frame', 'world'], ['ECI X rate', 'ECI Y rate', 'ECI Z rate', 'ECI rate magnitude']),
@@ -122,80 +122,46 @@ class TelemetryTail:
             writer.writerows(self.rows)
 
 
-def panel_png(fig, family, index):
-    axes = list(fig.axes)
-    if index >= len(FAMILIES[family][2]) or index >= len(axes):
-        raise ValueError('This panel requires full attitude and power telemetry')
-    chosen = [axes[index]]
-    if family in ('battery', 'sampled') and index == 0:
-        chosen.append(axes[3])
-    if family == 'solar' and index == 1:
-        chosen.append(axes[4])
-    fig.set_layout_engine(None)
-    fig.set_size_inches(8, 4.8)
-    if fig._suptitle:
-        fig._suptitle.set_visible(False)
-    for ax in axes:
-        ax.set_visible(ax in chosen)
-    for ax in chosen:
-        ax.set_position([0.16, 0.19, 0.67, 0.64])
-        ax.tick_params(labelbottom=True)
-    # Shared-axis panels inherit the source figure's time unit.
-    if not chosen[0].get_xlabel() and family != 'orbit':
-        chosen[0].set_xlabel('Simulation time (hours)' if family == 'pointing' else 'Simulation time (s)')
-    buffer = io.BytesIO()
-    fig.savefig(buffer, format='png', dpi=110)
-    return base64.b64encode(buffer.getvalue()).decode('ascii')
-
-
 class Dashboard:
     def __init__(self, path, config=None, max_rows=20000, estimator_enabled=True):
         self.tail = TelemetryTail(path, max_rows)
         self.estimator = TelemetryTail(Path(path).with_name(Path(path).stem + '_estimator.csv'), max_rows)
-        self.config = config
+        self.config = Path(config) if config else None
         self.estimator_enabled = estimator_enabled
         self.lock = threading.Lock()
         self.cache = {}
+        self.builders = {}
 
-    def render(self, ids):
+    def snapshot(self, ids, known=None):
+        """Return changed numeric panels; retained full-resolution data feeds all metrics."""
+        known = known or {}
         with self.lock:
             status = self.tail.poll()
             estimator_status = (self.estimator.poll() if self.estimator_enabled
                                 else 'Unavailable in orbit_solar mode')
-            result = {}
-            with tempfile.TemporaryDirectory(prefix='cubesat-live-') as directory:
-                for family in dict.fromkeys(item.split(':')[0] for item in ids):
-                    selected = [item for item in ids if item.startswith(family + ':')]
-                    tail = self.estimator if family == 'estimator' else self.tail
-                    missing = [item for item in selected if self.cache.get(item, (None,))[0] != tail.version]
-                    if missing:
-                        try:
-                            if family == 'estimator' and not self.estimator_enabled:
-                                raise ValueError(estimator_status)
-                            snapshot = Path(directory) / 'telemetry.csv'
-                            tail.snapshot(snapshot)
-                            module, options, _ = FAMILIES[family]
-                            argv = [str(snapshot), *options]
-                            if family == 'orbit':
-                                if not self.config:
-                                    raise ValueError('Restart dashboard with --config for orbit and attitude views')
-                                argv += ['--config', str(self.config), '--frames', '2']
-                            def capture(fig):
-                                for item in missing:
-                                    try:
-                                        value = {'image': panel_png(fig, family, int(item.split(':')[1]))}
-                                    except ValueError as exc:
-                                        value = {'error': str(exc)}
-                                    self.cache[item] = (tail.version, value)
-                            importlib.import_module('utilities.' + module).main(argv, render=capture)
-                        except (OSError, ValueError, KeyError, TypeError) as exc:
-                            for item in missing:
-                                self.cache[item] = (tail.version, {'error': str(exc)})
-                        finally:
-                            from matplotlib import pyplot as plt
-                            plt.close('all')
-                    result.update({item: self.cache[item][1] for item in selected})
-            return {'status': status, 'estimator_status': estimator_status, 'plots': result}
+            plots = {}
+            for item in ids:
+                family, index = item.split(':')
+                tail = self.estimator if family == 'estimator' else self.tail
+                if known.get(item) == tail.version:
+                    continue
+                if self.cache.get(item, (None,))[0] != tail.version:
+                    try:
+                        if family == 'estimator' and not self.estimator_enabled:
+                            raise ValueError(estimator_status)
+                        if not tail.rows:
+                            raise ValueError('Waiting for telemetry samples')
+                        key = 'estimator' if family == 'estimator' else 'main'
+                        if self.builders.get(key, (None,))[0] != tail.version:
+                            data = np.asarray(tail.rows, dtype=float)
+                            columns = {name: data[:, i] for i, name in enumerate(tail.header)}
+                            self.builders[key] = (tail.version, Traces(columns, self.config))
+                        value = self.builders[key][1].panel(family, int(index))
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        value = {'error': str(exc)}
+                    self.cache[item] = (tail.version, value)
+                plots[item] = dict(self.cache[item][1], version=tail.version)
+            return {'status': status, 'estimator_status': estimator_status, 'plots': plots}
 
 
 class SimulationSession:
@@ -238,8 +204,6 @@ def run_simulator_viewer(config, config_path, simulate, *, port=8765,
     Keeping physics on the main thread preserves normal Ctrl+C handling and the
     simulator's existing telemetry/controller cleanup on all supported platforms.
     """
-    import matplotlib
-    matplotlib.use('Agg')
     session = SimulationSession()
     dashboard = Dashboard(config['simulation']['output_csv'], config_path, max_rows,
                           estimator_enabled=config['simulation']['mode'] != 'orbit_solar')
@@ -277,70 +241,152 @@ def run_simulator_viewer(config, config_path, simulate, *, port=8765,
     return exit_code
 
 
-def make_server(dashboard, port=0, session=None):
-    class Handler(BaseHTTPRequestHandler):
-        def send_json(self, value, status=200):
-            body = json.dumps(value).encode()
-            self.send_response(status)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+class LiveServer:
+    """aiohttp server adapter retaining the simulator's main-thread lifecycle."""
+    def __init__(self, dashboard, port, session):
+        self.dashboard, self.session = dashboard, session
+        self.socket = socket.socket()
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.socket.bind(('127.0.0.1', port))
+            self.socket.listen(128)
+            self.socket.setblocking(False)
+        except BaseException:
+            self.socket.close()
+            raise
+        self.server_port = self.socket.getsockname()[1]
+        self.loop = None
+        self.stopping = threading.Event()
+        self.connections = set()
 
-        def do_POST(self):
-            if self.path != '/api/start' or session is None:
-                self.send_error(404)
-                return
-            # A different website must not be able to start hardware via localhost.
-            if not secrets.compare_digest(self.headers.get('X-Session-Token', ''), session.token):
-                self.send_error(403)
-                return
-            started = session.request_start()
-            self.send_json(session.snapshot(), 202 if started else 409)
+    def state(self):
+        return self.session.snapshot() if self.session else {'state': 'viewer-only'}
 
-        def do_GET(self):
-            url = urlparse(self.path)
+    def application(self):
+        from aiohttp import web, WSMsgType
+        app = web.Application(client_max_size=16384)
+        async def index(request):
+            return web.FileResponse(Path(__file__).with_name('live_dashboard.html'))
+        async def javascript(request):
+            return web.FileResponse(Path(__file__).with_name('live_dashboard.js'))
+        async def plotly(request):
+            import plotly
+            return web.FileResponse(Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js')
+        async def catalog(request):
+            return web.json_response(CATALOG)
+        async def state(request):
+            return web.json_response(self.state(), headers={'Cache-Control': 'no-store'})
+        async def websocket(request):
+            # Reject browser requests initiated by another origin, including DNS rebinding.
+            expected = f'http://127.0.0.1:{self.server_port}'
+            if request.host != f'127.0.0.1:{self.server_port}' or request.headers.get('Origin', expected) != expected:
+                raise web.HTTPForbidden()
+            ws = web.WebSocketResponse(heartbeat=20, max_msg_size=16384)
+            await ws.prepare(request)
+            self.connections.add(ws)
+            subscription = {'ids': [], 'paused': False, 'interval': .25, 'revision': 0}
+            acknowledged = asyncio.Event()
+            acknowledged.set()
+            async def stream():
+                known = {}
+                revision = -1
+                try:
+                    while not ws.closed:
+                        # One in-flight update per client. Slow tabs never accumulate a queue.
+                        await acknowledged.wait()
+                        acknowledged.clear()
+                        if revision != subscription['revision']:
+                            known = {}
+                            revision = subscription['revision']
+                        ids = [] if subscription['paused'] else list(subscription['ids'])
+                        state_value = self.state()
+                        if self.session and not self.session.output_ready.is_set():
+                            message = ('Arrange your graphs, then press Start simulation' if state_value['state'] == 'waiting'
+                                       else 'Waiting for simulation telemetry')
+                            payload = {'status': message, 'estimator_status': 'Not started',
+                                       'plots': {item: {'error': message} for item in ids}}
+                        else:
+                            try:
+                                payload = await asyncio.to_thread(self.dashboard.snapshot, ids, known)
+                            except Exception as exc:
+                                payload = {'status': f'Telemetry error: {exc}', 'estimator_status': '', 'plots': {}}
+                        for item, panel in payload['plots'].items():
+                            known[item] = panel.get('version')
+                        await ws.send_json(dict(payload, type='update', session=self.state()), dumps=lambda x: json.dumps(x, allow_nan=False))
+                        await asyncio.sleep(subscription['interval'])
+                except (ConnectionError, asyncio.CancelledError):
+                    pass
+                except Exception:
+                    traceback.print_exc()
+                    await ws.close(code=1011, message=b'Stream failed; reconnect')
+            sender = asyncio.create_task(stream())
             try:
-                if url.path == '/':
-                    body = Path(__file__).with_name('live_dashboard.html').read_bytes()
-                    content_type = 'text/html; charset=utf-8'
-                elif url.path == '/api/session':
-                    self.send_json(session.snapshot() if session else {'state': 'viewer-only'})
-                    return
-                elif url.path == '/api/catalog':
-                    body = json.dumps(CATALOG).encode()
-                    content_type = 'application/json'
-                elif url.path == '/api/plots':
-                    ids = list(dict.fromkeys(parse_qs(url.query).get('id', [])))
-                    if any(item not in VALID_IDS for item in ids):
-                        self.send_error(400, 'Unknown graph')
-                        return
-                    if session is not None and not session.output_ready.is_set():
-                        message = ('Arrange your graphs, then press Start simulation'
-                                   if session.snapshot()['state'] == 'waiting' else 'Waiting for simulation telemetry')
-                        self.send_json({'status': message, 'estimator_status': 'Not started',
-                                        'plots': {item: {'error': message} for item in ids}})
-                        return
-                    body = json.dumps(dashboard.render(ids)).encode()
-                    content_type = 'application/json'
-                else:
-                    self.send_error(404)
-                    return
-                self.send_response(200)
-                self.send_header('Content-Type', content_type)
-                self.send_header('Cache-Control', 'no-store')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except Exception as exc:
-                self.send_error(500, str(exc))
+                async for message in ws:
+                    if message.type != WSMsgType.TEXT:
+                        continue
+                    try:
+                        data = json.loads(message.data)
+                        if not isinstance(data, dict):
+                            raise ValueError('Expected an object')
+                        if data.get('type') == 'ack':
+                            acknowledged.set()
+                        elif data.get('type') == 'subscribe':
+                            ids = data.get('ids', [])
+                            if not isinstance(ids, list) or len(ids) > len(VALID_IDS) or any(not isinstance(i, str) or i not in VALID_IDS for i in ids):
+                                raise ValueError('Unknown graph selection')
+                            interval = float(data.get('interval', .25))
+                            if not np.isfinite(interval):
+                                raise ValueError('Invalid update interval')
+                            subscription.update(ids=list(dict.fromkeys(ids)), paused=bool(data.get('paused', False)),
+                                                interval=max(.1, min(10, interval)), revision=subscription['revision']+1)
+                        elif data.get('type') == 'start':
+                            if not self.session or not secrets.compare_digest(str(data.get('token', '')), self.session.token):
+                                raise ValueError('Invalid simulation session')
+                            self.session.request_start()
+                        else:
+                            raise ValueError('Unknown message type')
+                    except (ValueError, TypeError) as exc:
+                        await ws.send_json({'type': 'error', 'error': str(exc)})
+            finally:
+                sender.cancel()
+                await sender
+                self.connections.discard(ws)
+            return ws
+        app.add_routes([web.get('/', index), web.get('/live_dashboard.js', javascript),
+                        web.get('/plotly.js', plotly), web.get('/api/catalog', catalog),
+                        web.get('/api/session', state), web.get('/ws', websocket)])
+        return app
 
-        def log_message(self, *args):
-            pass
-    return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    async def _serve(self):
+        from aiohttp import web
+        self.loop = asyncio.get_running_loop()
+        runner = web.AppRunner(self.application(), shutdown_timeout=2)
+        await runner.setup()
+        try:
+            await web.SockSite(runner, self.socket).start()
+            while not self.stopping.is_set():
+                await asyncio.sleep(.1)
+        finally:
+            for connection in list(self.connections):
+                await connection.close(code=1001, message=b'Viewer closing')
+            await runner.cleanup()
+
+    def serve_forever(self):
+        asyncio.run(self._serve())
+
+    def shutdown(self):
+        self.stopping.set()
+
+    def server_close(self):
+        self.shutdown()
+        self.socket.close()
+
+
+def make_server(dashboard, port=0, session=None):
+    # Fail before waiting for Start if live dependencies are unavailable.
+    import aiohttp  # noqa: F401
+    import plotly  # noqa: F401
+    return LiveServer(dashboard, port, session)
 
 
 def main():
@@ -353,8 +399,6 @@ def main():
     args = cli.parse_args()
     if args.max_rows < 3 or not 0 <= args.port <= 65535:
         cli.error('--max-rows must be >= 3; --port must be between 0 and 65535')
-    import matplotlib
-    matplotlib.use('Agg')
     server = make_server(Dashboard(args.csv, args.config, args.max_rows), args.port)
     url = f'http://127.0.0.1:{server.server_port}'
     print(f'Live dashboard: {url}\nWatching {args.csv.resolve()} · Ctrl+C to close', flush=True)
