@@ -32,6 +32,8 @@ def load_animation_telemetry(path):
         available = set(csv.DictReader(source).fieldnames or [])
     full_dashboard = set(COLUMNS).issubset(available)
     columns = COLUMNS if full_dashboard else COLUMNS[:3]
+    if full_dashboard and "boom_length_m" in available:
+        columns += ("boom_length_m",)
     time, data = load_telemetry(path, columns)
     return time, data, full_dashboard
 
@@ -88,7 +90,9 @@ def frame_geometry(start, time, data, normals, area_efficiency, solar):
 
 
 def main(argv=None, render=None):
-    cli = parser(__doc__, "plots/orbit.gif")
+    cli = parser(__doc__, "plots/orbit.mp4")
+    cli.add_argument("--format", choices=("mp4", "gif", "html"),
+                     help="Output format; overrides the output filename extension (default: infer from -o, or mp4)")
     cli.add_argument("--config", type=Path, default=Path("config.yaml"), help="Config used for this simulation")
     cli.add_argument("--frames", type=int, default=300, help="Maximum animation frames (default: 300)")
     cli.add_argument("--fps", type=int, default=20, help="Playback frames per second (default: 20)")
@@ -97,9 +101,15 @@ def main(argv=None, render=None):
     args = cli.parse_args(argv)
     if args.frames < 2 or args.fps < 1:
         cli.error("--frames must be at least 2 and --fps must be positive")
-    if args.output.suffix.lower() not in (".gif", ".html"):
-        cli.error("animation output must have a .gif or .html extension")
+    if args.format:
+        args.output = args.output.with_suffix(f".{args.format}")
+    if args.output.suffix.lower() not in (".mp4", ".gif", ".html"):
+        cli.error("animation output must have a .mp4, .gif, or .html extension, or use --format")
+    from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
+    if render is None and args.output.suffix.lower() == ".mp4" and not FFMpegWriter.isAvailable():
+        raise ValueError("MP4 export requires FFmpeg on PATH (macOS: brew install ffmpeg)")
     time, data, full_dashboard = load_animation_telemetry(args.csv)
+    has_boom = full_dashboard and data.shape[1] > len(COLUMNS)
     with args.config.open() as source:
         config = yaml.safe_load(source)
     try:
@@ -126,6 +136,13 @@ def main(argv=None, render=None):
         raise ValueError("Earth radius must be finite and positive")
     if full_dashboard and np.any((data[:, 8] < 0) | (data[:, 8] > 1)):
         raise ValueError("Recorded sunlight_fraction must be between 0 and 1")
+    if has_boom:
+        boom_axis = np.asarray(config.get("spacecraft", {}).get("boom", {}).get("axis_body", []), dtype=float)
+        if boom_axis.shape != (3,) or not np.isfinite(boom_axis).all() or np.linalg.norm(boom_axis) == 0:
+            raise ValueError("spacecraft.boom.axis_body must be a finite nonzero three-component vector")
+        boom_axis /= np.linalg.norm(boom_axis)
+        if np.any(data[:, 9] < 0):
+            raise ValueError("Recorded boom_length_m must be nonnegative")
     frames, selected = frame_indices(time, args.frames, args.start_s, args.end_s)
     if full_dashboard:
         geometry = [frame_geometry(start, time[i], data[i], normals, area_efficiency, solar) for i in frames]
@@ -135,7 +152,6 @@ def main(argv=None, render=None):
     position = data[:, :3] / 1000
     extent = max(radius, np.linalg.norm(position[selected], axis=1).max())
     plt = pyplot(args.show)
-    from matplotlib.animation import FuncAnimation, PillowWriter
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     fig = plt.figure(figsize=(14, 10) if full_dashboard else (9, 9), layout="constrained")
@@ -158,6 +174,9 @@ def main(argv=None, render=None):
     sun_ray, = orbit_ax.plot([], [], [], color="goldenrod", linewidth=2, label="Toward Sun (length reduced)")
     if full_dashboard:
         orbit_axes = [orbit_ax.plot([], [], [], color=c, linewidth=2)[0] for c in ("C3", "C2", "C0")]
+    if has_boom:
+        orbit_boom, = orbit_ax.plot([], [], [], color="magenta", linewidth=3,
+                                    marker="o", markevery=[-1], label="Boom direction (length enlarged)")
     limit = extent * 1.6
     orbit_ax.set(xlim=(-limit, limit), ylim=(-limit, limit), zlim=(-limit, limit),
                  xlabel="ECI X (km)", ylabel="ECI Y (km)", zlabel="ECI Z (km)",
@@ -178,6 +197,9 @@ def main(argv=None, render=None):
                                       linewidth=3, label="Toward Sun")
         panel_lines = [attitude_ax.plot([], [], [], color="gold", marker="o", markersize=4)[0] for _ in normals]
         panel_labels = [attitude_ax.text(0, 0, 0, f"P{i + 1}", fontsize=8) for i in range(len(normals))]
+        if has_boom:
+            local_boom, = attitude_ax.plot([], [], [], color="magenta", linewidth=3,
+                                            marker="o", markevery=[-1], label="Boom direction (length enlarged)")
         attitude_ax.set(xlim=(-1.8, 1.8), ylim=(-1.8, 1.8), zlim=(-1.8, 1.8),
                         xlabel="ECI X", ylabel="ECI Y", zlabel="ECI Z",
                         title="Attitude · schematic body and panel normals\nFixed ECI view; not to scale")
@@ -212,6 +234,14 @@ def main(argv=None, render=None):
         p = position[row]
         satellite.set_data_3d(*p[:, None])
         sun_ray.set_data_3d(*np.array([p, p + sun_direction * extent * 0.5]).T)
+        if has_boom:
+            deployed = data[row, 9] > 0
+            for line in (orbit_boom, local_boom):
+                line.set_visible(deployed)
+            if deployed:
+                direction = body_to_world(boom_axis, data[row, 3:6])
+                orbit_boom.set_data_3d(*np.array([p, p + direction * extent * 0.5]).T)
+                local_boom.set_data_3d(*np.array([np.zeros(3), direction * 1.7]).T)
         if full_dashboard:
             for line, axis in zip(orbit_axes, axes):
                 line.set_data_3d(*np.array([p, p + axis * extent * 0.12]).T)
@@ -248,8 +278,11 @@ def main(argv=None, render=None):
         from matplotlib import rc_context
         with rc_context({"animation.embed_limit": float("inf")}):
             args.output.write_text(animation.to_jshtml(fps=args.fps, embed_frames=True), encoding="utf-8")
-    else:
+    elif args.output.suffix.lower() == ".gif":
         animation.save(args.output, writer=PillowWriter(fps=args.fps), dpi=90)
+    else:
+        animation.save(args.output, writer=FFMpegWriter(fps=args.fps, codec="libx264",
+                       extra_args=["-pix_fmt", "yuv420p", "-movflags", "+faststart"]), dpi=90)
     print(f"Saved {args.output} ({len(frames)} frames, t={time[frames[0]]:g}–{time[frames[-1]]:g} s)")
     if args.show:
         plt.show()

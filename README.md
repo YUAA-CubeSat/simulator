@@ -659,7 +659,7 @@ choose another output path or `--show` to also display the plot interactively.
 All time axes use simulation seconds. Magnetorquer plots hold each sampled
 value until the next sample; changes between telemetry samples cannot be recovered.
 
-The animation defaults to `plots/orbit.gif` and selects its layout from the CSV
+The animation defaults to `plots/orbit.mp4` and selects its layout from the CSV
 columns. With complete attitude and power telemetry, it synchronizes four views:
 
 - Recorded orbit position in J2000 Earth-centered inertial (ECI) coordinates,
@@ -673,6 +673,11 @@ columns. With complete attitude and power telemetry, it synchronizes four views:
 - Per-panel bus power estimated from orientation, configured active area and
   efficiencies, inverse-square Sun distance, and recorded `sunlight_fraction`.
   Eclipse state and recorded versus estimated total solar power are shown.
+
+When `boom_length_m` is recorded, a long magenta line in both 3D views shows
+the configured `spacecraft.boom.axis_body` rotated into ECI by the recorded
+attitude. It appears whenever the boom length is positive and disappears when
+fully retracted. Its length is enlarged for visibility, not drawn to scale.
 
 Use the config that produced the telemetry. The Sun direction uses the actual
 spacecraft-to-Sun vector from the simulator's ephemeris and the config's epoch;
@@ -711,9 +716,14 @@ orbit-only run.
 
 All scripts accept an optional CSV path (default `telemetry.csv`), `-o/--output`,
 and `--show` to also open a window. Static plots support PNG, PDF, and SVG output.
-The animation supports GIF and interactive HTML with playback controls:
+The animation supports H.264 MP4, GIF, and interactive HTML with playback controls.
+Use `--format mp4`, `--format gif`, or `--format html` to choose the format;
+this also replaces the output filename extension. Without `--format`, the format
+is inferred from `-o`, defaulting to `plots/orbit.mp4` when `-o` is omitted.
+MP4 export requires FFmpeg on your PATH (`brew install ffmpeg` on macOS):
 
 ```sh
+.venv/bin/python utilities/animate_orbit.py telemetry.csv --config config.yaml --format gif
 .venv/bin/python utilities/animate_orbit.py telemetry.csv --config config.yaml --frames 180 --fps 15 -o plots/orbit.html
 .venv/bin/python utilities/animate_orbit.py telemetry.csv --config software_config.yaml --start-s 900 --end-s 1200 --frames 301 -o plots/eclipse_exit.html
 .venv/bin/python utilities/plot_angular_velocity.py telemetry.csv -o plots/angular_velocity.svg --show
